@@ -1876,39 +1876,43 @@ void checkDailyEvents() {
         return;
     }
 
-    // Run once every 24 hours
-    if (now - myPet.lastDailyCheckTime >= SECONDS_IN_DAY) {
+    // Run once per 24-hour period, catching up on all missed days
+    bool ranCheck = false;
+    while (now - myPet.lastDailyCheckTime >= SECONDS_IN_DAY) {
+        ranCheck = true;
         Serial.println("[DAILY] Running Daily Health Check...");
-
+ 
         // 1. WEIGHT CHECK
         int target = getTargetWeight();
         int diff = abs(myPet.weight - target);
-        
+ 
         if (diff > 5) {
             float excess = (float)(diff - 5);
             float penalty = floor(excess / 2.5);
-            if (penalty < 1.0) penalty = 1.0; 
-            
+            if (penalty < 1.0) penalty = 1.0;
+ 
             Serial.printf("[WEIGHT] Target: %d, Actual: %d. Penalty: %.1f\n", target, myPet.weight, penalty);
             applyDamage(penalty);
         }
-
+ 
         // 2. ENVIRONMENTAL DAMAGE
-        
+ 
         // Check darkness deprivation (Lights OFF during day)
         // 8 hours = 28,800,000 ms
         if (darkDayAccumulator > 28800000) {
              Serial.println("[ENV] Darkness Deprivation. +5 Damage.");
              applyDamage(3.0);
         }
-
-        // Reset Trackers
-        myPet.lastDailyCheckTime = now;
-        // Note: goodSleepAccumulator is now reset in checkAutoSleep, 
-        // but it doesn't hurt to leave these resets here as a backup safety.
+ 
+        // Advance by exactly one day so we catch up on all missed days
+        myPet.lastDailyCheckTime += SECONDS_IN_DAY;
+        // Reset per-day trackers each iteration
         goodSleepAccumulator = 0;
         darkDayAccumulator = 0;
-        daytimePenaltyApplied = false; 
+        daytimePenaltyApplied = false;
+    }
+ 
+    if (ranCheck) { 
         
         saveGame();
     }
@@ -1918,21 +1922,62 @@ void calculateOfflineProgress() {
     time_t now; time(&now);
     if (now < 100000) return; // Sanity check
 
-    // --- 1. ENERGY RECOVERY ---
+    // --- 1. ENERGY RECOVERY & OFFLINE SLEEP EVALUATION ---
     // Reads the last save time to see if we crossed 7 AM
     preferences.begin(currentSaveSlot.c_str(), true);
     time_t lastSaveTime = (time_t)preferences.getUInt("lastSave", 0);
     preferences.end();
-
-    struct tm * t = localtime(&now);
-    t->tm_hour = 7; t->tm_min = 0; t->tm_sec = 0;
-    time_t today7AM = mktime(t);
-
+ 
+    struct tm tmNow = *localtime(&now);
+    tmNow.tm_hour = 7; tmNow.tm_min = 0; tmNow.tm_sec = 0;
+    time_t today7AM = mktime(&tmNow);
+ 
+    // Sleep window is 8h 30min (10:30 PM to 7:00 AM), so its start is:
+    time_t sleepWindowStart = today7AM - (8 * 3600 + 30 * 60);
+ 
     if (now >= today7AM && lastSaveTime < today7AM) {
-         Serial.println("[LOAD] Crossed 7AM boundary. Restoring Energy.");
-         myPet.energy = 100;
-         myPet.isSleeping = false;
-         myPet.isLightsOn = true;
+        // Device was off across the 7 AM boundary — energy recovery
+        Serial.println("[LOAD] Crossed 7AM boundary. Restoring Energy.");
+        myPet.energy = 100;
+        myPet.isSleeping = false;
+        myPet.isLightsOn = true;
+ 
+        // Evaluate sleep quality using real timestamps instead of millis()
+        // Credit offline time that fell inside the sleep window as "good sleep"
+        time_t offlineStart = (lastSaveTime > sleepWindowStart) ? lastSaveTime : sleepWindowStart;
+        time_t offlineEnd   = today7AM; // device was off until at least 7 AM
+        if (offlineEnd > offlineStart) {
+            goodSleepAccumulator += (unsigned long)(offlineEnd - offlineStart) * 1000UL;
+        }
+        Serial.printf("[LOAD] Offline sleep credited: %lu ms. Total: %lu ms\n",
+                      (unsigned long)(offlineEnd - offlineStart) * 1000UL, goodSleepAccumulator);
+ 
+        if (goodSleepAccumulator >= 18000000) {
+            myPet.sleepScore = min(6, myPet.sleepScore + 2);
+            Serial.println("[LOAD] Offline Sleep: Good night. +2 sleepScore.");
+        } else {
+            myPet.sleepScore = max(0, myPet.sleepScore - 2);
+            applyDamage(4.0);
+            Serial.println("[LOAD] Offline Sleep: Poor night. -2 sleepScore, +4 damage.");
+        }
+ 
+        // Reset trackers for the new day
+        goodSleepAccumulator = 0;
+        darkDayAccumulator = 0;
+        daytimePenaltyApplied = false;
+ 
+    } else if (now < today7AM && now >= sleepWindowStart) {
+        // Device booted during the sleep window — pet should be asleep right now
+        myPet.isSleeping = true;
+        myPet.status = "SLEEPING";
+ 
+        // Seed accumulator with the offline portion of sleep already completed
+        time_t offlineStart = (lastSaveTime > sleepWindowStart) ? lastSaveTime : sleepWindowStart;
+        if (now > offlineStart) {
+            goodSleepAccumulator += (unsigned long)(now - offlineStart) * 1000UL;
+        }
+        Serial.printf("[LOAD] Booted during sleep window. Seeded goodSleepAccumulator: %lu ms\n",
+                      goodSleepAccumulator);
     }
 
     // --- 2. RANDOM EVENT SPAWNER (RNG) ---
@@ -2444,6 +2489,11 @@ void saveGame() {
     preferences.putBool("t_sick5", myPet.hasTriggeredSick5Min);
     preferences.putBool("t_sick1", myPet.hasTriggeredSick1Hr);
     preferences.putBool("t_neg1",  myPet.hasTriggeredNeglect1Hr);
+
+    // 7. SLEEP ACCUMULATORS (must survive power-off)
+    preferences.putUInt("goodSleep", (uint32_t)goodSleepAccumulator);
+    preferences.putUInt("darkDay",   (uint32_t)darkDayAccumulator);
+    preferences.putBool("dayPen",    daytimePenaltyApplied);
     // -------------------------------
     
     preferences.end();
@@ -2516,6 +2566,11 @@ void loadGame(String slotName) {
         myPet.hasTriggeredSick5Min   = preferences.getBool("t_sick5", false);
         myPet.hasTriggeredSick1Hr    = preferences.getBool("t_sick1", false);
         myPet.hasTriggeredNeglect1Hr = preferences.getBool("t_neg1", false);
+
+        // --- LOAD SLEEP ACCUMULATORS ---
+        goodSleepAccumulator  = (unsigned long)preferences.getUInt("goodSleep", 0);
+        darkDayAccumulator    = (unsigned long)preferences.getUInt("darkDay", 0);
+        daytimePenaltyApplied = preferences.getBool("dayPen", false);
 
         // This releases the lock so saveGame() can write later
         preferences.end(); 
