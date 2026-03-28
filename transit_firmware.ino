@@ -186,7 +186,6 @@ int subMenuSelection = 0;
 
 // STATS & SLEEP TRACKING
 int statsPage = 0; // 0=Hunger, 1=Happy, 2=Sleep
-bool isLightsOn = true;
 unsigned long lastSleepCheckTime = 0;
 
 // --- TIMING CONSTANTS (IN SECONDS) ---
@@ -1644,7 +1643,6 @@ void checkAutoSleep() {
     if (myPet.isSleeping && !shouldBeAsleep) {
         myPet.isSleeping = false;
         myPet.status = "IDLE";
-        isLightsOn = true;
         myPet.isLightsOn = true;
         myPet.energy = 100;
 
@@ -2126,7 +2124,7 @@ void updateTamagotchi() {
         currentGameState != last_gameState ||
         statsPage != last_statsPage ||
         playMenuSelection != last_playMenuSelection ||
-        isLightsOn != last_isLightsOn) {
+        myPet.isLightsOn != last_isLightsOn) {
             
         screenDirty = true;
         last_selectedIcon = selectedIcon;
@@ -2134,7 +2132,7 @@ void updateTamagotchi() {
         last_gameState = currentGameState;
         last_statsPage = statsPage;
         last_playMenuSelection = playMenuSelection;
-        last_isLightsOn = isLightsOn;
+        last_isLightsOn = myPet.isLightsOn;
     }
 
     if (currentGameState == STATE_GAME_PLAY || currentGameState == STATE_CONNECT_3) {
@@ -3124,7 +3122,7 @@ void handleButtonPress() {
                 saveMenuSelection = 0; 
                 lastPressTime = millis(); 
                 
-                dma_display->setBrightness8(isLightsOn ? 60 : 5);
+                dma_display->setBrightness8(myPet.isLightsOn ? 60 : 5);
 
             } else {
                 // === EXITING GAME ===
