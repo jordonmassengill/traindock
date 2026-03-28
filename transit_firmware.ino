@@ -232,15 +232,16 @@ struct PetStats {
     bool hasTriggeredNeglect1Hr;    
 
     // --- TIMERS FOR DAMAGE DURATION (Start of Event) ---
-    time_t lastHungerTime;          
-    time_t zeroHungerTime;          
-    time_t zeroFunTime;             
-    time_t lastSicknessTime;        
-    time_t nextSickDamageTime;      
-    time_t lastShowerTime;          
-    time_t nextDirtyDamageTime;     
-    time_t lastMisbehaveTime;       
+    time_t lastHungerTime;
+    time_t zeroHungerTime;
+    time_t zeroFunTime;
+    time_t lastSicknessTime;
+    time_t nextSickDamageTime;
+    time_t lastShowerTime;
+    time_t nextDirtyDamageTime;
+    time_t lastMisbehaveTime;
     time_t nextDisciplineDamageTime;
+    time_t lastNonWeightDamageTime; // Last time non-weight damage was taken (for 7-day streak)
     
     // --- TIMERS FOR IMMUNITY (End of Event) ---
     time_t lastCleanedTime;      // Set when you wash them
@@ -278,7 +279,7 @@ PetStats myPet = {
   100.0, false,                // Vitality, isDead
   0, false, 0,                  // Alignment, Evolved, EvoTime
   false, false, false, false, false, false, false, // 7 Trigger Bools
-  0, 0, 0, 0, 0, 0, 0, 0, 0,   // 9 Loop Timers
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 10 Loop Timers
   0, 0, 0,                     // 3 Immunity Timers
   0, 0,                        // Daily/Event Timers
   23, 23, 0, 0, "IDLE", 0,     // Position & Visuals
@@ -289,7 +290,7 @@ PetStats myPet = {
 Preferences preferences;
 String currentSaveSlot = ""; // "leah" or "juan"
 int saveMenuSelection = 0;   // 0 = Leah, 1 = Juan
-void applyDamage(float amount);
+void applyDamage(float amount, bool isWeightDamage = false);
 
 // --- MINI GAME VARIABLES ---
 int gameCursorX = 0;
@@ -300,12 +301,13 @@ const int GAME_TICK_RATE = 50; // Fast updates for smooth animation
 
 // --- CONNECT 3 VARIABLES ---
 // 5 Columns x 5 Rows. 0: Empty, 1: Player, 2: CPU
-int board[5][5] = {{0}}; 
+int board[5][5] = {{0}};
 int connect3CursorX = 2; // Middle column (0-4)
 int playerTurn = 1;      // 1: Player, 2: CPU
 bool gameActive = false;
 unsigned long lastCpuMoveTime = 0;
 const int CPU_MOVE_DELAY = 1000; // 1 second
+int connect3LossStreak = 0; // Consecutive losses; +5 vitality at 3-in-a-row
 
 // --- PLAY MENU VARIABLE ---
 int playMenuSelection = 0; // 0: Catch, 1: Connect 3
@@ -1743,7 +1745,7 @@ float getAgeMultiplier() {
     if (days < 5) return 1.0;
     if (days < 10) return 1.5;
     if (days < 20) return 2.0;
-    return 4.0; // Senior Mode
+    return 3.0; // Senior Mode
 }
 
 // 2. Target Weight Calculation
@@ -1759,9 +1761,15 @@ int getTargetWeight() {
 }
 
 // 3. Apply Damage Helper
-void applyDamage(float amount) {
+void applyDamage(float amount, bool isWeightDamage) {
     if (myPet.isDead) return;
-    
+
+    // Track when non-weight damage last occurred (used for 7-day streak bonus)
+    if (!isWeightDamage) {
+        time_t now; time(&now);
+        myPet.lastNonWeightDamageTime = now;
+    }
+
     float mult = getAgeMultiplier();
     float finalDmg = amount * mult;
     
@@ -1929,17 +1937,28 @@ void checkDailyEvents() {
             float excess = (float)(diff - 5);
             float penalty = floor(excess / 2.5);
             if (penalty < 1.0) penalty = 1.0;
- 
+
             Serial.printf("[WEIGHT] Target: %d, Actual: %d. Penalty: %.1f\n", target, myPet.weight, penalty);
-            applyDamage(penalty);
+            applyDamage(penalty, true); // Weight damage does NOT reset the no-damage streak
         }
- 
+
         // Advance by exactly one day so we catch up on all missed days
         myPet.lastDailyCheckTime += SECONDS_IN_DAY;
     }
- 
-    if (ranCheck) { 
-        
+
+    // 7-day no-non-weight-damage streak bonus
+    if (myPet.lastNonWeightDamageTime != 0) {
+        time_t streakDays = (now - myPet.lastNonWeightDamageTime) / SECONDS_IN_DAY;
+        if (streakDays >= 7) {
+            myPet.vitality = min(100.0f, myPet.vitality + 10.0f);
+            // Advance the streak clock by 7 days so it re-triggers after another 7 clean days
+            myPet.lastNonWeightDamageTime += (7 * SECONDS_IN_DAY);
+            ranCheck = true; // Ensure saveGame() runs
+            Serial.println("[VITALITY] +10 bonus: 7 days without non-weight damage!");
+        }
+    }
+
+    if (ranCheck) {
         saveGame();
     }
 }
@@ -2465,6 +2484,9 @@ void saveGame() {
     
     preferences.remove("l_disc");
     preferences.putUInt("l_disc",  (uint32_t)myPet.lastDisciplinedTime);
+
+    preferences.remove("l_nwdmg");
+    preferences.putUInt("l_nwdmg", (uint32_t)myPet.lastNonWeightDamageTime);
     
     // 3. STATES
     preferences.putBool("sick", myPet.isSick);
@@ -2551,6 +2573,8 @@ void loadGame(String slotName) {
         myPet.lastCleanedTime     = (time_t)preferences.getUInt("l_clean", 0);
         myPet.lastCuredTime       = (time_t)preferences.getUInt("l_cure", 0);
         myPet.lastDisciplinedTime = (time_t)preferences.getUInt("l_disc", 0);
+        // If this is an existing save without this field, default to now so no spurious reward
+        { time_t n; time(&n); myPet.lastNonWeightDamageTime = (time_t)preferences.getUInt("l_nwdmg", (uint32_t)n); }
         
         myPet.isSick = preferences.getBool("sick", false);
         myPet.isDirty = preferences.getBool("dirty", false);
@@ -2615,6 +2639,7 @@ void loadGame(String slotName) {
         myPet.birthTime = now;
         myPet.lastHungerTime = now;
         myPet.lastCoinTime = now;
+        myPet.lastNonWeightDamageTime = now;
         myPet.isLightsOn = true;
         myPet.alignment = 0;
         myPet.hasEvolved = false;
@@ -3580,12 +3605,20 @@ void handleButtonPress() {
         else if (currentGameState == STATE_MEDICINE_MENU) {
             // CONFIRM (GIVE MEDS) - BART_S
             if (bartSPressed) {
-                myPet.isSick = false;
-                myPet.happiness = min(100, myPet.happiness + 10); 
-                // Set Immunity Timer
                 time_t now; time(&now);
+                long sickDuration = now - myPet.lastSicknessTime;
+
+                myPet.isSick = false;
+                myPet.happiness = min(100, myPet.happiness + 10);
+                // Set Immunity Timer
                 myPet.lastCuredTime = now;
-                
+
+                // Bonus: +5 vitality for curing within 3 seconds of getting sick
+                if (myPet.lastSicknessTime != 0 && sickDuration <= 3) {
+                    myPet.vitality = min(100.0f, myPet.vitality + 5.0f);
+                    Serial.println("[VITALITY] +5 bonus: Cured within 3 seconds of sickness!");
+                }
+
                 dma_display->fillScreen(0x0000);
                 dma_display->setCursor(16, 28);
                 dma_display->setTextColor(0x07E0); // Green
@@ -3838,8 +3871,9 @@ void handleButtonPress() {
                 if (r != -1) { 
                     if (checkWin(1, connect3CursorX, r)) {
                         // PLAYER WINS
-                        gameActive = false; 
-                        
+                        gameActive = false;
+                        connect3LossStreak = 0; // Reset loss streak
+
                         // Reward
                         myPet.happiness = min(100, myPet.happiness + 25);
                         myPet.energy = max(0, myPet.energy - 10);
@@ -5230,11 +5264,19 @@ void cpuMove() {
             if (checkWin(2, col, r)) {
                 bestMove = col;
                 gameActive = false; // CPU Wins
-                
+
                 // --- CHAO WINS (Happy!) ---
                 myPet.happiness = min(100, myPet.happiness + 50);
                 myPet.energy = max(0, myPet.energy - 25);
-                
+
+                // Loss streak bonus: +5 vitality after 3 consecutive losses
+                connect3LossStreak++;
+                if (connect3LossStreak >= 3) {
+                    myPet.vitality = min(100.0f, myPet.vitality + 5.0f);
+                    connect3LossStreak = 0;
+                    Serial.println("[VITALITY] +5 bonus: Lost Connect 3 three times in a row!");
+                }
+
                 return; // Leave piece there and exit
             }
             board[col][r] = 0; // Undo
@@ -5278,11 +5320,19 @@ void cpuMove() {
         r = dropPiece(2, bestMove);
         if (checkWin(2, bestMove, r)) {
             gameActive = false; // CPU Wins
-            
+
             // --- CHAO WINS (Happy!) ---
             myPet.happiness = min(100, myPet.happiness + 50);
             myPet.energy = max(0, myPet.energy - 10);
-            
+
+            // Loss streak bonus: +5 vitality after 3 consecutive losses
+            connect3LossStreak++;
+            if (connect3LossStreak >= 3) {
+                myPet.vitality = min(100.0f, myPet.vitality + 5.0f);
+                connect3LossStreak = 0;
+                Serial.println("[VITALITY] +5 bonus: Lost Connect 3 three times in a row!");
+            }
+
         } else {
             playerTurn = 1; // Back to Player
         }
