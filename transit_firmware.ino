@@ -2082,11 +2082,6 @@ void calculateOfflineProgress() {
 
 void updateTamagotchi() {
 
-    // --- CHECK VITALITY ---
-    if (currentGameState != STATE_DEATH) {
-        checkVitality();
-    }
-
     // --- STATE: DEATH (R.I.P.) ---
     if (currentGameState == STATE_DEATH) {
         dma_display->fillScreen(0x0000);
@@ -2775,6 +2770,13 @@ void loadGame(String slotName) {
         if (myPet.hasTriggeredHungerCrit && myPet.hunger <= 0) {
             time_t n; time(&n);
             myPet.zeroHungerTime = n;
+        }
+
+        // zeroFunTime is not persisted. Same boot-loop risk as zeroHungerTime —
+        // anchor to now so the depression while-loop resumes from this moment.
+        if (myPet.hasTriggeredFunCrit && myPet.happiness <= 0) {
+            time_t n; time(&n);
+            myPet.zeroFunTime = n;
         }
 
         // --- LOAD SLEEP TIMESTAMP & ACCUMULATOR ---
