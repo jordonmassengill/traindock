@@ -2768,6 +2768,15 @@ void loadGame(String slotName) {
         myPet.hasTriggeredSick1Hr    = preferences.getBool("t_sick1", false);
         myPet.hasTriggeredNeglect1Hr = preferences.getBool("t_neg1", false);
 
+        // zeroHungerTime is not persisted. If we load into an already-critical
+        // state (hunger == 0, hasTriggeredHungerCrit == true), the starvation
+        // while-loop in checkVitality would see (now - 0) and fire thousands of
+        // times. Anchor the clock to now so damage resumes from this moment.
+        if (myPet.hasTriggeredHungerCrit && myPet.hunger <= 0) {
+            time_t n; time(&n);
+            myPet.zeroHungerTime = n;
+        }
+
         // --- LOAD SLEEP TIMESTAMP & ACCUMULATOR ---
         myPet.lightsOffTime = (time_t)preferences.getUInt("lightsOff", 0);
         myPet.accumulatedDarkSeconds = preferences.getLong("darkAccum", 0);
