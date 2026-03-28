@@ -1643,7 +1643,6 @@ void checkAutoSleep() {
     if (myPet.isSleeping && !shouldBeAsleep) {
         myPet.isSleeping = false;
         myPet.status = "IDLE";
-        myPet.isLightsOn = true;
         myPet.energy = 100;
 
         // Build the exact 7 AM timestamp for this morning
@@ -1969,7 +1968,6 @@ void calculateOfflineProgress() {
         Serial.println("[LOAD] Crossed 7AM boundary. Restoring Energy.");
         myPet.energy = 100;
         myPet.isSleeping = false;
-        myPet.isLightsOn = true;
 
         evaluateSleepQuality(today7AM);
         Serial.println("[LOAD] Offline sleep evaluated from lightsOffTime.");
