@@ -267,6 +267,8 @@ struct PetStats {
     bool isLightsOn;
     time_t lightsOffTime;        // Unix timestamp when the current darkness period started (0 = lights are on)
     long accumulatedDarkSeconds; // Total dark seconds accumulated across all light-off periods this sleep cycle
+    time_t lightsOffDayTime;        // Unix timestamp when darkness started during the awake window (0 = lights on)
+    long accumulatedDayDarkSeconds; // Total dark seconds accumulated during the awake window this day cycle
 };
 
 // INITIALIZATION
@@ -281,7 +283,7 @@ PetStats myPet = {
   0, 0, 0,                     // 3 Immunity Timers
   0, 0,                        // Daily/Event Timers
   23, 23, 0, 0, "IDLE", 0,     // Position & Visuals
-  false, false, false, false, true, 0, 0 // States + lightsOffTime + accumulatedDarkSeconds
+  false, false, false, false, true, 0, 0, 0, 0 // States + lightsOffTime + accumulatedDarkSeconds + lightsOffDayTime + accumulatedDayDarkSeconds
 };
 
 // --- Save File Globals ---
@@ -1591,6 +1593,36 @@ void evaluateSleepQuality(time_t wakeTime) {
     myPet.accumulatedDarkSeconds = 0; // Reset accumulator for the new day
 }
 
+// Calculates total seconds lights were off within the awake window ending at bedtime.
+// Awake window = 7:00 AM (bedtime - 56400s) to 10:30 PM (bedtime).
+long calculateDayDarkSeconds(time_t bedtime) {
+    long total = myPet.accumulatedDayDarkSeconds;
+    // Add the current ongoing darkness period if lights are still off
+    if (myPet.lightsOffDayTime != 0) {
+        time_t dayWindowStart = bedtime - (15 * 3600 + 30 * 60); // 7:00 AM
+        time_t effectiveStart = (myPet.lightsOffDayTime > dayWindowStart) ? myPet.lightsOffDayTime : dayWindowStart;
+        if (bedtime > effectiveStart) {
+            total += (long)(bedtime - effectiveStart);
+        }
+    }
+    return total;
+}
+
+// Scores the day's light exposure and applies damage if lights were off too long.
+// Call this exactly once per sleep event, passing the 10:30 PM boundary time.
+void evaluateDayLightQuality(time_t bedtime) {
+    long darkSeconds = calculateDayDarkSeconds(bedtime);
+    // Bad day threshold: 5 hours of lights-off within the awake window
+    if (darkSeconds >= 18000) {
+        applyDamage(3.0);
+        Serial.printf("[DAY] Lights off too long: %ld s dark. +3 damage.\n", darkSeconds);
+    } else {
+        Serial.printf("[DAY] Lights on enough: %ld s dark. No penalty.\n", darkSeconds);
+    }
+    myPet.lightsOffDayTime = 0;         // Reset for the new day
+    myPet.accumulatedDayDarkSeconds = 0; // Reset accumulator for the new day
+}
+
 void checkAutoSleep() {
     // Run this check once per second to save math cycles
     if (millis() - lastSleepCheckTime < 1000) return;
@@ -1629,6 +1661,13 @@ void checkAutoSleep() {
     else if (!myPet.isSleeping && shouldBeAsleep) {
         myPet.isSleeping = true;
         myPet.status = "SLEEPING";
+
+        // Build the exact 10:30 PM timestamp for this evening
+        struct tm tmBed = *localtime(&now);
+        tmBed.tm_hour = 22; tmBed.tm_min = 30; tmBed.tm_sec = 0;
+        time_t today1030PM = mktime(&tmBed);
+
+        evaluateDayLightQuality(today1030PM);
         // Save so lightsOffTime is persisted before the device might be closed
         saveGame();
     }
@@ -1920,6 +1959,12 @@ void calculateOfflineProgress() {
     // Sleep window: 10:30 PM the previous night to 7:00 AM
     time_t sleepWindowStart = today7AM - (8 * 3600 + 30 * 60);
 
+    // Build the 10:30 PM timestamp for this evening
+    struct tm tmBed = *localtime(&now);
+    tmBed.tm_hour = 22; tmBed.tm_min = 30; tmBed.tm_sec = 0;
+    time_t today1030PM = mktime(&tmBed);
+    time_t dayWindowStart = today1030PM - (15 * 3600 + 30 * 60); // 7:00 AM
+
     if (now >= today7AM && myPet.isSleeping) {
         // Device was closed during the night and is now being opened after 7 AM.
         // lightsOffTime already holds the real Unix timestamp from when lights went off.
@@ -1937,6 +1982,14 @@ void calculateOfflineProgress() {
         myPet.isSleeping = true;
         myPet.status = "SLEEPING";
         Serial.println("[LOAD] Booted during sleep window. Pet is sleeping.");
+    }
+
+    // --- 1B. DAYTIME LIGHT EVALUATION (offline crossing of 10:30 PM) ---
+    // If device was closed during the day and reopened after 10:30 PM (and Chao was awake),
+    // evaluate the daytime light quality against the 10:30 PM boundary.
+    if (now >= today1030PM && !myPet.isSleeping && (myPet.lightsOffDayTime != 0 || myPet.accumulatedDayDarkSeconds > 0)) {
+        evaluateDayLightQuality(today1030PM);
+        Serial.println("[LOAD] Offline daytime light evaluated from lightsOffDayTime.");
     }
 
     // --- 2. RANDOM EVENT SPAWNER (RNG) ---
@@ -2452,6 +2505,9 @@ void saveGame() {
     // 7. SLEEP TIMESTAMP & ACCUMULATOR
     preferences.putUInt("lightsOff", (uint32_t)myPet.lightsOffTime);
     preferences.putLong("darkAccum", myPet.accumulatedDarkSeconds);
+    // 8. DAYTIME LIGHT TIMESTAMP & ACCUMULATOR
+    preferences.putUInt("lightsOffDay", (uint32_t)myPet.lightsOffDayTime);
+    preferences.putLong("dayDarkAccum", myPet.accumulatedDayDarkSeconds);
     
     preferences.end();
     Serial.println("[SAVE] Game Saved Successfully.");
@@ -2527,6 +2583,9 @@ void loadGame(String slotName) {
         // --- LOAD SLEEP TIMESTAMP & ACCUMULATOR ---
         myPet.lightsOffTime = (time_t)preferences.getUInt("lightsOff", 0);
         myPet.accumulatedDarkSeconds = preferences.getLong("darkAccum", 0);
+        // --- LOAD DAYTIME LIGHT TIMESTAMP & ACCUMULATOR ---
+        myPet.lightsOffDayTime = (time_t)preferences.getUInt("lightsOffDay", 0);
+        myPet.accumulatedDayDarkSeconds = preferences.getLong("dayDarkAccum", 0);
 
         // This releases the lock so saveGame() can write later
         preferences.end(); 
@@ -3299,10 +3358,14 @@ void handleButtonPress() {
                         // Record the exact moment this darkness period began
                         time_t now; time(&now);
                         myPet.lightsOffTime = now;
+                        // Also track daytime darkness if Chao is awake
+                        if (!myPet.isSleeping) {
+                            myPet.lightsOffDayTime = now;
+                        }
                     } else {
                         // Lights back on — accumulate the darkness period that just ended
+                        time_t now; time(&now);
                         if (myPet.lightsOffTime != 0) {
-                            time_t now; time(&now);
                             struct tm tmWake = *localtime(&now);
                             tmWake.tm_hour = 7; tmWake.tm_min = 0; tmWake.tm_sec = 0;
                             time_t today7AM = mktime(&tmWake);
@@ -3314,6 +3377,20 @@ void handleButtonPress() {
                                 myPet.accumulatedDarkSeconds += (long)(darkEnd - effectiveStart);
                             }
                             myPet.lightsOffTime = 0;
+                        }
+                        // Accumulate daytime darkness if Chao is awake
+                        if (!myPet.isSleeping && myPet.lightsOffDayTime != 0) {
+                            struct tm tmBed = *localtime(&now);
+                            tmBed.tm_hour = 22; tmBed.tm_min = 30; tmBed.tm_sec = 0;
+                            time_t today1030PM = mktime(&tmBed);
+                            time_t dayWindowStart = today1030PM - (15 * 3600 + 30 * 60); // 7:00 AM
+                            // Cap the end of the dark period at now or 10:30 PM, whichever is earlier
+                            time_t darkEnd = (now < today1030PM) ? now : today1030PM;
+                            time_t effectiveStart = (myPet.lightsOffDayTime > dayWindowStart) ? myPet.lightsOffDayTime : dayWindowStart;
+                            if (darkEnd > effectiveStart) {
+                                myPet.accumulatedDayDarkSeconds += (long)(darkEnd - effectiveStart);
+                            }
+                            myPet.lightsOffDayTime = 0;
                         }
                     }
                     saveGame();
