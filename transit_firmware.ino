@@ -4423,6 +4423,10 @@ void drawIdleAnimation(struct tm* timeinfo) {
             // Christmas Day
             currentAnimFrames = christmas_frames; currentAnimFrameCount = 5;
         } 
+        else if (month == 3 && dayOfMonth == 1) { 
+            // April Fools
+            currentAnimFrames = april_frames; currentAnimFrameCount = 6;
+        } 
         else if (dayOfMonth == 13) { 
             // Scooby Doo
             currentAnimFrames = scoobydoo_frames; currentAnimFrameCount = 9;
