@@ -265,7 +265,8 @@ struct PetStats {
     bool isDirty;
     bool isMisbehaving;
     bool isLightsOn;
-    time_t lightsOffTime;  // Unix timestamp when lights were turned off (0 = lights are on)
+    time_t lightsOffTime;        // Unix timestamp when the current darkness period started (0 = lights are on)
+    long accumulatedDarkSeconds; // Total dark seconds accumulated across all light-off periods this sleep cycle
 };
 
 // INITIALIZATION
@@ -280,7 +281,7 @@ PetStats myPet = {
   0, 0, 0,                     // 3 Immunity Timers
   0, 0,                        // Daily/Event Timers
   23, 23, 0, 0, "IDLE", 0,     // Position & Visuals
-  false, false, false, false, true, 0 // States + lightsOffTime
+  false, false, false, false, true, 0, 0 // States + lightsOffTime + accumulatedDarkSeconds
 };
 
 // --- Save File Globals ---
@@ -1557,15 +1558,20 @@ void drawIconBitmap(int x, int y, int iconIndex, uint16_t color) {
     }
 }
 
-// Calculates seconds lights were off within the sleep window ending at wakeTime.
+// Calculates total seconds lights were off within the sleep window ending at wakeTime.
 // Sleep window = 10:30 PM (wakeTime - 30600s) to wakeTime (7:00 AM).
-// If lights were never turned off (lightsOffTime == 0), returns 0.
+// Sums all accumulated dark periods plus any ongoing darkness period.
 long calculateDarkSleepSeconds(time_t wakeTime) {
-    if (myPet.lightsOffTime == 0) return 0;
-    time_t sleepWindowStart = wakeTime - (8 * 3600 + 30 * 60); // 10:30 PM
-    time_t effectiveStart = (myPet.lightsOffTime > sleepWindowStart) ? myPet.lightsOffTime : sleepWindowStart;
-    if (wakeTime <= effectiveStart) return 0;
-    return (long)(wakeTime - effectiveStart);
+    long total = myPet.accumulatedDarkSeconds;
+    // Add the current ongoing darkness period if lights are still off
+    if (myPet.lightsOffTime != 0) {
+        time_t sleepWindowStart = wakeTime - (8 * 3600 + 30 * 60); // 10:30 PM
+        time_t effectiveStart = (myPet.lightsOffTime > sleepWindowStart) ? myPet.lightsOffTime : sleepWindowStart;
+        if (wakeTime > effectiveStart) {
+            total += (long)(wakeTime - effectiveStart);
+        }
+    }
+    return total;
 }
 
 // Scores the night's sleep and applies rewards/penalties.
@@ -1581,7 +1587,8 @@ void evaluateSleepQuality(time_t wakeTime) {
         applyDamage(4.0);
         Serial.printf("[SLEEP] Poor sleep: %ld s dark. -2 sleepScore, +4 damage.\n", darkSeconds);
     }
-    myPet.lightsOffTime = 0; // Reset for the new day
+    myPet.lightsOffTime = 0;        // Reset for the new day
+    myPet.accumulatedDarkSeconds = 0; // Reset accumulator for the new day
 }
 
 void checkAutoSleep() {
@@ -2442,8 +2449,9 @@ void saveGame() {
     preferences.putBool("t_sick1", myPet.hasTriggeredSick1Hr);
     preferences.putBool("t_neg1",  myPet.hasTriggeredNeglect1Hr);
 
-    // 7. SLEEP TIMESTAMP
+    // 7. SLEEP TIMESTAMP & ACCUMULATOR
     preferences.putUInt("lightsOff", (uint32_t)myPet.lightsOffTime);
+    preferences.putLong("darkAccum", myPet.accumulatedDarkSeconds);
     
     preferences.end();
     Serial.println("[SAVE] Game Saved Successfully.");
@@ -2516,8 +2524,9 @@ void loadGame(String slotName) {
         myPet.hasTriggeredSick1Hr    = preferences.getBool("t_sick1", false);
         myPet.hasTriggeredNeglect1Hr = preferences.getBool("t_neg1", false);
 
-        // --- LOAD SLEEP TIMESTAMP ---
+        // --- LOAD SLEEP TIMESTAMP & ACCUMULATOR ---
         myPet.lightsOffTime = (time_t)preferences.getUInt("lightsOff", 0);
+        myPet.accumulatedDarkSeconds = preferences.getLong("darkAccum", 0);
 
         // This releases the lock so saveGame() can write later
         preferences.end(); 
@@ -3287,13 +3296,25 @@ void handleButtonPress() {
                 else if (selectedIcon == ICON_LIGHT) {
                     myPet.isLightsOn = !myPet.isLightsOn;
                     if (!myPet.isLightsOn) {
-                        // Record the exact moment lights went off
+                        // Record the exact moment this darkness period began
                         time_t now; time(&now);
                         myPet.lightsOffTime = now;
                     } else {
-                        // Lights back on — clear the timestamp so sleep quality
-                        // is judged from the most recent lights-off moment
-                        myPet.lightsOffTime = 0;
+                        // Lights back on — accumulate the darkness period that just ended
+                        if (myPet.lightsOffTime != 0) {
+                            time_t now; time(&now);
+                            struct tm tmWake = *localtime(&now);
+                            tmWake.tm_hour = 7; tmWake.tm_min = 0; tmWake.tm_sec = 0;
+                            time_t today7AM = mktime(&tmWake);
+                            time_t sleepWindowStart = today7AM - (8 * 3600 + 30 * 60); // 10:30 PM
+                            // Cap the end of the dark period at now or 7AM, whichever is earlier
+                            time_t darkEnd = (now < today7AM) ? now : today7AM;
+                            time_t effectiveStart = (myPet.lightsOffTime > sleepWindowStart) ? myPet.lightsOffTime : sleepWindowStart;
+                            if (darkEnd > effectiveStart) {
+                                myPet.accumulatedDarkSeconds += (long)(darkEnd - effectiveStart);
+                            }
+                            myPet.lightsOffTime = 0;
+                        }
                     }
                     saveGame();
                     screenDirty = true;
