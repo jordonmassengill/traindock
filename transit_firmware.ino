@@ -2699,7 +2699,8 @@ void saveGame() {
     // 8. DAYTIME LIGHT TIMESTAMP & ACCUMULATOR
     preferences.putUInt("lightsOffDay", (uint32_t)myPet.lightsOffDayTime);
     preferences.putLong("dayDarkAccum", myPet.accumulatedDayDarkSeconds);
-    
+    preferences.putInt("c3streak", connect3LossStreak);
+
     preferences.end();
     Serial.println("[SAVE] Game Saved Successfully.");
 }
@@ -2799,9 +2800,10 @@ void loadGame(String slotName) {
         // --- LOAD DAYTIME LIGHT TIMESTAMP & ACCUMULATOR ---
         myPet.lightsOffDayTime = (time_t)preferences.getUInt("lightsOffDay", 0);
         myPet.accumulatedDayDarkSeconds = preferences.getLong("dayDarkAccum", 0);
+        connect3LossStreak = preferences.getInt("c3streak", 0);
 
         // This releases the lock so saveGame() can write later
-        preferences.end(); 
+        preferences.end();
         // ****************************************
 
         Serial.println("File Loaded. Calculating offline progress...");
