@@ -186,11 +186,8 @@ int subMenuSelection = 0;
 
 // STATS & SLEEP TRACKING
 int statsPage = 0; // 0=Hunger, 1=Happy, 2=Sleep
-bool isLightsOn = true; 
+bool isLightsOn = true;
 unsigned long lastSleepCheckTime = 0;
-unsigned long goodSleepAccumulator = 0; 
-unsigned long darkDayAccumulator = 0;   
-bool daytimePenaltyApplied = false;     
 
 // --- TIMING CONSTANTS (IN SECONDS) ---
 const long SECONDS_IN_12_HOURS = 43200; 
@@ -263,11 +260,12 @@ struct PetStats {
     String status;  
     unsigned long actionStartTime;
 
-    bool isSleeping; 
-    bool isSick; 
+    bool isSleeping;
+    bool isSick;
     bool isDirty;
     bool isMisbehaving;
     bool isLightsOn;
+    time_t lightsOffTime;  // Unix timestamp when lights were turned off (0 = lights are on)
 };
 
 // INITIALIZATION
@@ -282,7 +280,7 @@ PetStats myPet = {
   0, 0, 0,                     // 3 Immunity Timers
   0, 0,                        // Daily/Event Timers
   23, 23, 0, 0, "IDLE", 0,     // Position & Visuals
-  false, false, false, false, true   // States
+  false, false, false, false, true, 0 // States + lightsOffTime
 };
 
 // --- Save File Globals ---
@@ -1559,80 +1557,78 @@ void drawIconBitmap(int x, int y, int iconIndex, uint16_t color) {
     }
 }
 
+// Calculates seconds lights were off within the sleep window ending at wakeTime.
+// Sleep window = 10:30 PM (wakeTime - 30600s) to wakeTime (7:00 AM).
+// If lights were never turned off (lightsOffTime == 0), returns 0.
+long calculateDarkSleepSeconds(time_t wakeTime) {
+    if (myPet.lightsOffTime == 0) return 0;
+    time_t sleepWindowStart = wakeTime - (8 * 3600 + 30 * 60); // 10:30 PM
+    time_t effectiveStart = (myPet.lightsOffTime > sleepWindowStart) ? myPet.lightsOffTime : sleepWindowStart;
+    if (wakeTime <= effectiveStart) return 0;
+    return (long)(wakeTime - effectiveStart);
+}
+
+// Scores the night's sleep and applies rewards/penalties.
+// Call this exactly once per wake-up event, passing the 7 AM boundary time.
+void evaluateSleepQuality(time_t wakeTime) {
+    long darkSeconds = calculateDarkSleepSeconds(wakeTime);
+    // Good sleep threshold: 5 hours of lights-off within the sleep window
+    if (darkSeconds >= 18000) {
+        myPet.sleepScore = min(6, myPet.sleepScore + 2);
+        Serial.printf("[SLEEP] Good sleep: %ld s dark. +2 sleepScore.\n", darkSeconds);
+    } else {
+        myPet.sleepScore = max(0, myPet.sleepScore - 2);
+        applyDamage(4.0);
+        Serial.printf("[SLEEP] Poor sleep: %ld s dark. -2 sleepScore, +4 damage.\n", darkSeconds);
+    }
+    myPet.lightsOffTime = 0; // Reset for the new day
+}
+
 void checkAutoSleep() {
     // Run this check once per second to save math cycles
     if (millis() - lastSleepCheckTime < 1000) return;
-    unsigned long delta = millis() - lastSleepCheckTime;
     lastSleepCheckTime = millis();
 
-    if (!isTimeSynced()) return; 
+    if (!isTimeSynced()) return;
 
     time_t now; time(&now);
     struct tm * t = localtime(&now);
     int currentMins = (t->tm_hour * 60) + t->tm_min;
-    
+
     // --- SLEEP WINDOW: 10:30 PM (1350) to 7:00 AM (420) ---
     bool shouldBeAsleep = (currentMins >= 1350 || currentMins < 420);
-    
+
     // --- STATE TRANSITIONS ---
-    
+
     // A. WAKE UP EVENT (7:00 AM)
-    // This runs if the device is actually ON at 7:00 AM
+    // Runs if the device is actually on and awake at 7:00 AM
     if (myPet.isSleeping && !shouldBeAsleep) {
         myPet.isSleeping = false;
         myPet.status = "IDLE";
-        isLightsOn = true; 
-        myPet.energy = 100; // Live Energy Refill
-        
-        // --- SCORE & PENALTY CALCULATION ---
-        // 5 Hours = 18,000,000 ms
-        if (goodSleepAccumulator >= 18000000) {
-            // GOOD SLEEP: Bonus Score
-            myPet.sleepScore = min(6, myPet.sleepScore + 2);
-        } else {
-            // BAD SLEEP: Penalty Score AND Damage
-            myPet.sleepScore = max(0, myPet.sleepScore - 2);
-            Serial.println("[ENV] Sleep Disruption (Short sleep). +5 Damage.");
-            applyDamage(4.0);
-        }
-        
-        // Reset trackers for the new day
-        goodSleepAccumulator = 0;
-        darkDayAccumulator = 0;
-        daytimePenaltyApplied = false;
+        isLightsOn = true;
+        myPet.isLightsOn = true;
+        myPet.energy = 100;
+
+        // Build the exact 7 AM timestamp for this morning
+        struct tm tmWake = *localtime(&now);
+        tmWake.tm_hour = 7; tmWake.tm_min = 0; tmWake.tm_sec = 0;
+        time_t today7AM = mktime(&tmWake);
+
+        evaluateSleepQuality(today7AM);
+        saveGame();
     }
 
     // B. GO TO SLEEP EVENT (10:30 PM)
     else if (!myPet.isSleeping && shouldBeAsleep) {
         myPet.isSleeping = true;
         myPet.status = "SLEEPING";
-        // --- SAVE ON SLEEP START ---
-        // This ensures our timestamp is accurate before we turn it off for the night
-        saveGame(); 
-        // --------------------------------
+        // Save so lightsOffTime is persisted before the device might be closed
+        saveGame();
     }
 
     // --- [FAILSAFE] FORCE ENERGY REFILL IF JUST WOKE UP LIVE ---
-    // Catches glitches where the transition might have been missed by milliseconds
     if (currentMins >= 420 && currentMins < 425 && myPet.energy < 100) {
         myPet.energy = 100;
-    }
-
-    // --- ACCUMULATORS ---
-    if (myPet.isSleeping) {
-        if (!myPet.isLightsOn) {
-            goodSleepAccumulator += delta;
-        }
-    } 
-    else {
-        if (!myPet.isLightsOn) {
-            darkDayAccumulator += delta;
-            // Check for 3 Hour Penalty (10,800,000 ms)
-            if (darkDayAccumulator >= 10800000 && !daytimePenaltyApplied) {
-                myPet.sleepScore = max(0, myPet.sleepScore - 3);
-                daytimePenaltyApplied = true; 
-            }
-        }
     }
 }
 
@@ -1895,21 +1891,8 @@ void checkDailyEvents() {
             applyDamage(penalty);
         }
  
-        // 2. ENVIRONMENTAL DAMAGE
- 
-        // Check darkness deprivation (Lights OFF during day)
-        // 8 hours = 28,800,000 ms
-        if (darkDayAccumulator > 28800000) {
-             Serial.println("[ENV] Darkness Deprivation. +5 Damage.");
-             applyDamage(3.0);
-        }
- 
         // Advance by exactly one day so we catch up on all missed days
         myPet.lastDailyCheckTime += SECONDS_IN_DAY;
-        // Reset per-day trackers each iteration
-        goodSleepAccumulator = 0;
-        darkDayAccumulator = 0;
-        daytimePenaltyApplied = false;
     }
  
     if (ranCheck) { 
@@ -1923,61 +1906,30 @@ void calculateOfflineProgress() {
     if (now < 100000) return; // Sanity check
 
     // --- 1. ENERGY RECOVERY & OFFLINE SLEEP EVALUATION ---
-    // Reads the last save time to see if we crossed 7 AM
-    preferences.begin(currentSaveSlot.c_str(), true);
-    time_t lastSaveTime = (time_t)preferences.getUInt("lastSave", 0);
-    preferences.end();
- 
     struct tm tmNow = *localtime(&now);
     tmNow.tm_hour = 7; tmNow.tm_min = 0; tmNow.tm_sec = 0;
     time_t today7AM = mktime(&tmNow);
- 
-    // Sleep window is 8h 30min (10:30 PM to 7:00 AM), so its start is:
+
+    // Sleep window: 10:30 PM the previous night to 7:00 AM
     time_t sleepWindowStart = today7AM - (8 * 3600 + 30 * 60);
- 
-    if (now >= today7AM && lastSaveTime < today7AM) {
-        // Device was off across the 7 AM boundary — energy recovery
+
+    if (now >= today7AM && myPet.isSleeping) {
+        // Device was closed during the night and is now being opened after 7 AM.
+        // lightsOffTime already holds the real Unix timestamp from when lights went off.
         Serial.println("[LOAD] Crossed 7AM boundary. Restoring Energy.");
         myPet.energy = 100;
         myPet.isSleeping = false;
         myPet.isLightsOn = true;
- 
-        // Evaluate sleep quality using real timestamps instead of millis()
-        // Credit offline time that fell inside the sleep window as "good sleep"
-        time_t offlineStart = (lastSaveTime > sleepWindowStart) ? lastSaveTime : sleepWindowStart;
-        time_t offlineEnd   = today7AM; // device was off until at least 7 AM
-        if (offlineEnd > offlineStart) {
-            goodSleepAccumulator += (unsigned long)(offlineEnd - offlineStart) * 1000UL;
-        }
-        Serial.printf("[LOAD] Offline sleep credited: %lu ms. Total: %lu ms\n",
-                      (unsigned long)(offlineEnd - offlineStart) * 1000UL, goodSleepAccumulator);
- 
-        if (goodSleepAccumulator >= 18000000) {
-            myPet.sleepScore = min(6, myPet.sleepScore + 2);
-            Serial.println("[LOAD] Offline Sleep: Good night. +2 sleepScore.");
-        } else {
-            myPet.sleepScore = max(0, myPet.sleepScore - 2);
-            applyDamage(4.0);
-            Serial.println("[LOAD] Offline Sleep: Poor night. -2 sleepScore, +4 damage.");
-        }
- 
-        // Reset trackers for the new day
-        goodSleepAccumulator = 0;
-        darkDayAccumulator = 0;
-        daytimePenaltyApplied = false;
- 
+
+        evaluateSleepQuality(today7AM);
+        Serial.println("[LOAD] Offline sleep evaluated from lightsOffTime.");
+
     } else if (now < today7AM && now >= sleepWindowStart) {
-        // Device booted during the sleep window — pet should be asleep right now
+        // Device opened mid-sleep-window — pet should still be asleep.
+        // No accumulator needed; lightsOffTime already captures when lights went off.
         myPet.isSleeping = true;
         myPet.status = "SLEEPING";
- 
-        // Seed accumulator with the offline portion of sleep already completed
-        time_t offlineStart = (lastSaveTime > sleepWindowStart) ? lastSaveTime : sleepWindowStart;
-        if (now > offlineStart) {
-            goodSleepAccumulator += (unsigned long)(now - offlineStart) * 1000UL;
-        }
-        Serial.printf("[LOAD] Booted during sleep window. Seeded goodSleepAccumulator: %lu ms\n",
-                      goodSleepAccumulator);
+        Serial.println("[LOAD] Booted during sleep window. Pet is sleeping.");
     }
 
     // --- 2. RANDOM EVENT SPAWNER (RNG) ---
@@ -2490,11 +2442,8 @@ void saveGame() {
     preferences.putBool("t_sick1", myPet.hasTriggeredSick1Hr);
     preferences.putBool("t_neg1",  myPet.hasTriggeredNeglect1Hr);
 
-    // 7. SLEEP ACCUMULATORS (must survive power-off)
-    preferences.putUInt("goodSleep", (uint32_t)goodSleepAccumulator);
-    preferences.putUInt("darkDay",   (uint32_t)darkDayAccumulator);
-    preferences.putBool("dayPen",    daytimePenaltyApplied);
-    // -------------------------------
+    // 7. SLEEP TIMESTAMP
+    preferences.putUInt("lightsOff", (uint32_t)myPet.lightsOffTime);
     
     preferences.end();
     Serial.println("[SAVE] Game Saved Successfully.");
@@ -2567,10 +2516,8 @@ void loadGame(String slotName) {
         myPet.hasTriggeredSick1Hr    = preferences.getBool("t_sick1", false);
         myPet.hasTriggeredNeglect1Hr = preferences.getBool("t_neg1", false);
 
-        // --- LOAD SLEEP ACCUMULATORS ---
-        goodSleepAccumulator  = (unsigned long)preferences.getUInt("goodSleep", 0);
-        darkDayAccumulator    = (unsigned long)preferences.getUInt("darkDay", 0);
-        daytimePenaltyApplied = preferences.getBool("dayPen", false);
+        // --- LOAD SLEEP TIMESTAMP ---
+        myPet.lightsOffTime = (time_t)preferences.getUInt("lightsOff", 0);
 
         // This releases the lock so saveGame() can write later
         preferences.end(); 
@@ -3339,7 +3286,17 @@ void handleButtonPress() {
                 }
                 else if (selectedIcon == ICON_LIGHT) {
                     myPet.isLightsOn = !myPet.isLightsOn;
-                    screenDirty = true; // Force redraw to catch the change immediately
+                    if (!myPet.isLightsOn) {
+                        // Record the exact moment lights went off
+                        time_t now; time(&now);
+                        myPet.lightsOffTime = now;
+                    } else {
+                        // Lights back on — clear the timestamp so sleep quality
+                        // is judged from the most recent lights-off moment
+                        myPet.lightsOffTime = 0;
+                    }
+                    saveGame();
+                    screenDirty = true;
                 }
                 else if (selectedIcon == ICON_PLAY) {
                     if (!myPet.isSleeping) {
