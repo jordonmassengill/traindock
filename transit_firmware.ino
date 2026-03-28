@@ -2549,9 +2549,7 @@ void updateTamagotchi() {
             int cy = (int)flappyY;
             dma_display->fillCircle(cx, cy, 3, currentChao.C_BL);           // body
             dma_display->fillCircle(cx, cy - 2, 2, currentChao.C_LB);       // head highlight
-            dma_display->drawPixel(cx, cy - 5, currentChao.C_LB);           // orb stalk
-            dma_display->drawPixel(cx, cy - 6, currentChao.C_LB);           // orb stalk
-            dma_display->fillCircle(cx, cy - 8, 2, currentChao.C_LB);       // floating orb (iconic Chao feature)
+            dma_display->fillRect(cx - 1, cy - 9, 2, 2, currentChao.C_LB);  // floating orb (2x2 square)            
             dma_display->fillCircle(cx - 2, cy - 1, 1, currentChao.C_WH);  // left eye
             dma_display->fillCircle(cx + 1, cy - 1, 1, currentChao.C_WH);  // right eye
             dma_display->drawPixel(cx - 2, cy - 1, currentChao.C_DK);       // left pupil
@@ -3570,7 +3568,7 @@ void handleButtonPress() {
                 }
                 else if (selectedIcon == ICON_PLAY) {
                     if (!myPet.isSleeping) {
-                        if (myPet.energy >= 10) {
+                        if (myPet.energy >= 0) {
                             currentGameState = STATE_PLAY_MENU;
                             playMenuSelection = 0; 
                         } else {
