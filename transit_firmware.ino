@@ -1929,6 +1929,8 @@ void checkVitality() {
              }
 
              // Recurring Neglect Loop
+             // Guard against 0 (unpersisted or old save) to prevent catch-up loop from epoch
+             if (myPet.nextDisciplineDamageTime == 0) myPet.nextDisciplineDamageTime = myPet.lastMisbehaveTime + 3600 + (8 * 3600);
              while (now >= myPet.nextDisciplineDamageTime) {
                 applyDamage(2.0);
                 myPet.nextDisciplineDamageTime += (8 * 3600);
@@ -2638,6 +2640,9 @@ void saveGame() {
     preferences.remove("l_misb");
     preferences.putUInt("l_misb", (uint32_t)myPet.lastMisbehaveTime);
 
+    preferences.remove("n_disc_dmg");
+    preferences.putUInt("n_disc_dmg", (uint32_t)myPet.nextDisciplineDamageTime);
+
     preferences.remove("l_clean");
     preferences.putUInt("l_clean", (uint32_t)myPet.lastCleanedTime);
     
@@ -2731,7 +2736,8 @@ void loadGame(String slotName) {
         myPet.lastSicknessTime    = (time_t)preferences.getUInt("l_sick", 0);
         // Note: Saved key is "l_dirty", variable is lastShowerTime
         myPet.lastShowerTime      = (time_t)preferences.getUInt("l_dirty", 0); 
-        myPet.lastMisbehaveTime   = (time_t)preferences.getUInt("l_misb", 0);
+        myPet.lastMisbehaveTime        = (time_t)preferences.getUInt("l_misb", 0);
+        myPet.nextDisciplineDamageTime = (time_t)preferences.getUInt("n_disc_dmg", 0);
         myPet.lastCleanedTime     = (time_t)preferences.getUInt("l_clean", 0);
         myPet.lastCuredTime       = (time_t)preferences.getUInt("l_cure", 0);
         myPet.lastDisciplinedTime = (time_t)preferences.getUInt("l_disc", 0);
