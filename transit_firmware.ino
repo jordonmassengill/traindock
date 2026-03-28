@@ -327,7 +327,7 @@ int flappyPipeTimer = 0;      // Frames until next pipe spawns
 const float FLAPPY_GRAVITY = 0.35f;
 const float FLAPPY_FLAP_VEL = -3.2f;
 const int FLAPPY_PIPE_W = 6;
-const int FLAPPY_GAP_HALF = 7; // Half-gap: total gap = 14px
+const int FLAPPY_GAP_HALF = 11; // Half-gap: total gap = 22px
 const int FLAPPY_CHAO_X = 12;  // Fixed horizontal position of the Chao
 
 // --- PLAY MENU VARIABLE ---
@@ -2503,14 +2503,14 @@ void updateTamagotchi() {
                 }
 
                 // Collision: walls
-                bool dead = (flappyY - 4 < 0 || flappyY + 4 > 61);
+                bool dead = (flappyY - 3 < 0 || flappyY + 3 > 61);
 
                 // Collision: pipes
                 for (int i = 0; i < flappyActivePipes && !dead; i++) {
                     int px = flappyPipes[i].x;
                     int pgapY = flappyPipes[i].gapY;
-                    if (FLAPPY_CHAO_X + 4 > px && FLAPPY_CHAO_X - 4 < px + FLAPPY_PIPE_W) {
-                        if ((int)flappyY - 4 < pgapY - FLAPPY_GAP_HALF || (int)flappyY + 4 > pgapY + FLAPPY_GAP_HALF) {
+                    if (FLAPPY_CHAO_X + 3 > px && FLAPPY_CHAO_X - 3 < px + FLAPPY_PIPE_W) {
+                        if ((int)flappyY - 3 < pgapY - FLAPPY_GAP_HALF || (int)flappyY + 3 > pgapY + FLAPPY_GAP_HALF) {
                             dead = true;
                         }
                     }
@@ -2544,16 +2544,20 @@ void updateTamagotchi() {
                 if (botY < 59) dma_display->fillRect(capX, botY, capW, 3, 0x0340);
             }
 
-            // Draw Chao (mini)
+            // Draw Chao (Sonic Adventure Battle 2 style)
             int cx = FLAPPY_CHAO_X;
             int cy = (int)flappyY;
-            dma_display->fillCircle(cx, cy, 4, currentChao.C_BL);          // body
-            dma_display->fillCircle(cx, cy - 4, 2, currentChao.C_LB);      // head bump
-            dma_display->fillCircle(cx - 2, cy - 1, 1, currentChao.C_WH); // left eye
-            dma_display->fillCircle(cx + 1, cy - 1, 1, currentChao.C_WH); // right eye
-            dma_display->drawPixel(cx - 2, cy - 1, currentChao.C_DK);      // left pupil
-            dma_display->drawPixel(cx + 1, cy - 1, currentChao.C_DK);      // right pupil
-            dma_display->fillCircle(cx + 4, cy + 1, 2, currentChao.C_PK); // wing
+            dma_display->fillCircle(cx, cy, 3, currentChao.C_BL);           // body
+            dma_display->fillCircle(cx, cy - 2, 2, currentChao.C_LB);       // head highlight
+            dma_display->drawPixel(cx, cy - 5, currentChao.C_LB);           // orb stalk
+            dma_display->drawPixel(cx, cy - 6, currentChao.C_LB);           // orb stalk
+            dma_display->fillCircle(cx, cy - 8, 2, currentChao.C_LB);       // floating orb (iconic Chao feature)
+            dma_display->fillCircle(cx - 2, cy - 1, 1, currentChao.C_WH);  // left eye
+            dma_display->fillCircle(cx + 1, cy - 1, 1, currentChao.C_WH);  // right eye
+            dma_display->drawPixel(cx - 2, cy - 1, currentChao.C_DK);       // left pupil
+            dma_display->drawPixel(cx + 1, cy - 1, currentChao.C_DK);       // right pupil
+            dma_display->fillCircle(cx + 3, cy + 1, 1, currentChao.C_PK);  // right wing
+            dma_display->fillCircle(cx - 3, cy + 1, 1, currentChao.C_PK);  // left wing
 
             // Score (top right)
             dma_display->setTextColor(0xFFFF);
