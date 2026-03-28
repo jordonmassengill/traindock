@@ -173,6 +173,7 @@ enum GameState {
     STATE_PLAY_MENU,
     STATE_GAME_PLAY,
     STATE_CONNECT_3,
+    STATE_FLAPPY_BIRD,
     STATE_MEDICINE_MENU,
     STATE_BATHROOM_MENU,
     STATE_SAVE_SELECT,
@@ -309,8 +310,28 @@ unsigned long lastCpuMoveTime = 0;
 const int CPU_MOVE_DELAY = 1000; // 1 second
 int connect3LossStreak = 0; // Consecutive losses; +5 vitality at 3-in-a-row
 
+// --- FLAPPY BIRD VARIABLES ---
+struct FlappyPipe {
+    int x;
+    int gapY;    // Y center of the gap
+    bool passed;
+};
+float flappyY = 32.0f;
+float flappyVelY = 0.0f;
+bool flappyActive = false;    // True while game is running (after first tap)
+bool flappyDead = false;      // True after collision
+int flappyScore = 0;
+FlappyPipe flappyPipes[3];
+int flappyActivePipes = 0;
+int flappyPipeTimer = 0;      // Frames until next pipe spawns
+const float FLAPPY_GRAVITY = 0.35f;
+const float FLAPPY_FLAP_VEL = -3.2f;
+const int FLAPPY_PIPE_W = 6;
+const int FLAPPY_GAP_HALF = 7; // Half-gap: total gap = 14px
+const int FLAPPY_CHAO_X = 12;  // Fixed horizontal position of the Chao
+
 // --- PLAY MENU VARIABLE ---
-int playMenuSelection = 0; // 0: Catch, 1: Connect 3
+int playMenuSelection = 0; // 0: Catch, 1: Connect 3, 2: Flappy Bird
 
 // --- BITMAP ASSETS ---
 const uint8_t icons_8x8[8][8] = {
@@ -526,6 +547,7 @@ void initConnect3();
 int dropPiece(int player, int col);
 bool checkWin(int player, int lastCol, int lastRow);
 void cpuMove();
+void initFlappyBird();
 
 
 // --- HELPER FUNCTIONS ---
@@ -2152,8 +2174,8 @@ void updateTamagotchi() {
         last_isLightsOn = myPet.isLightsOn;
     }
 
-    if (currentGameState == STATE_GAME_PLAY || currentGameState == STATE_CONNECT_3) {
-        screenDirty = true; 
+    if (currentGameState == STATE_GAME_PLAY || currentGameState == STATE_CONNECT_3 || currentGameState == STATE_FLAPPY_BIRD) {
+        screenDirty = true;
     }
 
     if (!screenDirty) return;
@@ -2361,8 +2383,9 @@ void updateTamagotchi() {
     else if (currentGameState == STATE_PLAY_MENU) {
         dma_display->fillScreen(0x0000); 
         dma_display->setTextColor(0xFFFF);
-        dma_display->setCursor(10, 15); dma_display->setTextColor(playMenuSelection == 0 ? 0x07E0 : 0xFFFF); dma_display->print("CATCH");
-        dma_display->setCursor(10, 35); dma_display->setTextColor(playMenuSelection == 1 ? 0x07E0 : 0xFFFF); dma_display->print("CONNECT 3");
+        dma_display->setCursor(10, 10); dma_display->setTextColor(playMenuSelection == 0 ? 0x07E0 : 0xFFFF); dma_display->print("CATCH");
+        dma_display->setCursor(10, 26); dma_display->setTextColor(playMenuSelection == 1 ? 0x07E0 : 0xFFFF); dma_display->print("CONNECT 3");
+        dma_display->setCursor(10, 42); dma_display->setTextColor(playMenuSelection == 2 ? 0x07E0 : 0xFFFF); dma_display->print("FLAPPY");
     }
 
     // --- STATE: CATCH GAME ---
@@ -2431,6 +2454,130 @@ void updateTamagotchi() {
                 dma_display->drawRect(1, 1, 62, 62, (playerTurn == 1) ? 0x07E0 : 0xF800);
             }
             
+            dma_display->flipDMABuffer();
+        }
+    }
+
+    // --- STATE: FLAPPY BIRD ---
+    else if (currentGameState == STATE_FLAPPY_BIRD) {
+        static unsigned long lastFlappyDraw = 0;
+        if (millis() - lastFlappyDraw > 33) { // ~30 FPS
+            lastFlappyDraw = millis();
+
+            // --- PHYSICS & GAME UPDATE (only while actively flying) ---
+            if (flappyActive && !flappyDead) {
+                flappyVelY += FLAPPY_GRAVITY;
+                flappyY += flappyVelY;
+
+                // Move pipes left
+                for (int i = 0; i < flappyActivePipes; i++) {
+                    flappyPipes[i].x -= 1;
+                }
+
+                // Remove off-screen pipes
+                for (int i = 0; i < flappyActivePipes; ) {
+                    if (flappyPipes[i].x + FLAPPY_PIPE_W < 0) {
+                        for (int j = i; j < flappyActivePipes - 1; j++) flappyPipes[j] = flappyPipes[j + 1];
+                        flappyActivePipes--;
+                    } else { i++; }
+                }
+
+                // Spawn new pipes
+                flappyPipeTimer--;
+                if (flappyPipeTimer <= 0 && flappyActivePipes < 3) {
+                    int gapOptions[5] = {14, 22, 30, 38, 46};
+                    flappyPipes[flappyActivePipes].x = 64;
+                    flappyPipes[flappyActivePipes].gapY = gapOptions[random(0, 5)];
+                    flappyPipes[flappyActivePipes].passed = false;
+                    flappyActivePipes++;
+                    flappyPipeTimer = 55;
+                }
+
+                // Score: passed a pipe
+                for (int i = 0; i < flappyActivePipes; i++) {
+                    if (!flappyPipes[i].passed && flappyPipes[i].x + FLAPPY_PIPE_W < FLAPPY_CHAO_X - 4) {
+                        flappyPipes[i].passed = true;
+                        flappyScore++;
+                        myPet.happiness = min(100, myPet.happiness + 2);
+                    }
+                }
+
+                // Collision: walls
+                bool dead = (flappyY - 4 < 0 || flappyY + 4 > 61);
+
+                // Collision: pipes
+                for (int i = 0; i < flappyActivePipes && !dead; i++) {
+                    int px = flappyPipes[i].x;
+                    int pgapY = flappyPipes[i].gapY;
+                    if (FLAPPY_CHAO_X + 4 > px && FLAPPY_CHAO_X - 4 < px + FLAPPY_PIPE_W) {
+                        if ((int)flappyY - 4 < pgapY - FLAPPY_GAP_HALF || (int)flappyY + 4 > pgapY + FLAPPY_GAP_HALF) {
+                            dead = true;
+                        }
+                    }
+                }
+
+                if (dead) {
+                    flappyDead = true;
+                    myPet.energy = max(0, myPet.energy - 15);
+                    if (flappyScore >= 5) myPet.happiness = min(100, myPet.happiness + 10);
+                }
+            }
+
+            // --- DRAW ---
+            dma_display->fillScreen(0x0000);
+
+            // Ground line
+            dma_display->drawLine(0, 61, 63, 61, 0xA540);
+
+            // Draw pipes
+            for (int i = 0; i < flappyActivePipes; i++) {
+                int px = flappyPipes[i].x;
+                int pgapY = flappyPipes[i].gapY;
+                int topH = pgapY - FLAPPY_GAP_HALF;
+                int botY = pgapY + FLAPPY_GAP_HALF;
+                if (topH > 0)  dma_display->fillRect(px, 0, FLAPPY_PIPE_W, topH, 0x07E0);
+                if (botY < 62) dma_display->fillRect(px, botY, FLAPPY_PIPE_W, 62 - botY, 0x07E0);
+                // Pipe caps (wider, slightly darker green)
+                int capX = max(0, px - 1);
+                int capW = (px - 1 < 0) ? FLAPPY_PIPE_W + px : FLAPPY_PIPE_W + 2;
+                if (topH > 3)  dma_display->fillRect(capX, max(0, topH - 3), capW, 3, 0x0340);
+                if (botY < 59) dma_display->fillRect(capX, botY, capW, 3, 0x0340);
+            }
+
+            // Draw Chao (mini)
+            int cx = FLAPPY_CHAO_X;
+            int cy = (int)flappyY;
+            dma_display->fillCircle(cx, cy, 4, currentChao.C_BL);          // body
+            dma_display->fillCircle(cx, cy - 4, 2, currentChao.C_LB);      // head bump
+            dma_display->fillCircle(cx - 2, cy - 1, 1, currentChao.C_WH); // left eye
+            dma_display->fillCircle(cx + 1, cy - 1, 1, currentChao.C_WH); // right eye
+            dma_display->drawPixel(cx - 2, cy - 1, currentChao.C_DK);      // left pupil
+            dma_display->drawPixel(cx + 1, cy - 1, currentChao.C_DK);      // right pupil
+            dma_display->fillCircle(cx + 4, cy + 1, 2, currentChao.C_PK); // wing
+
+            // Score (top right)
+            dma_display->setTextColor(0xFFFF);
+            dma_display->setCursor(48, 2);
+            dma_display->print(flappyScore);
+
+            // Ready screen
+            if (!flappyActive && !flappyDead) {
+                dma_display->setCursor(16, 28);
+                dma_display->setTextColor(0xFFE0);
+                dma_display->print("TAP!");
+            }
+
+            // Game over overlay
+            if (flappyDead) {
+                dma_display->drawRect(0, 0, 64, 64, 0xF800);
+                dma_display->drawRect(1, 1, 62, 62, 0xF800);
+                dma_display->setCursor(10, 22);
+                dma_display->setTextColor(0xFFFF);
+                dma_display->print("SCORE");
+                dma_display->setCursor(26, 33);
+                dma_display->print(flappyScore);
+            }
+
             dma_display->flipDMABuffer();
         }
     }
@@ -3761,20 +3908,23 @@ void handleButtonPress() {
         else if (currentGameState == STATE_PLAY_MENU) {
             
             // SCROLL OPTIONS (BART_N)
-            if (bartNPressed) { 
-                playMenuSelection = (playMenuSelection + 1) % 2; 
+            if (bartNPressed) {
+                playMenuSelection = (playMenuSelection + 1) % 3;
                 lastPressTime = millis();
                 while(digitalRead(BTN_BART_N_PIN) == LOW) { delay(10); }
             }
-            
-            // SELECT GAME (BART_S) 
+
+            // SELECT GAME (BART_S)
             else if (bartSPressed) {
                 if (playMenuSelection == 0) {
-                    currentGameState = STATE_GAME_PLAY; 
+                    currentGameState = STATE_GAME_PLAY;
                     gameCursorX = 0;
                 } else if (playMenuSelection == 1) {
-                    initConnect3(); 
-                    currentGameState = STATE_CONNECT_3; 
+                    initConnect3();
+                    currentGameState = STATE_CONNECT_3;
+                } else if (playMenuSelection == 2) {
+                    initFlappyBird();
+                    currentGameState = STATE_FLAPPY_BIRD;
                 }
                 
                 while(digitalRead(BTN_BART_S_PIN) == LOW) { delay(10); }
@@ -3907,8 +4057,45 @@ void handleButtonPress() {
             }
         }
 
-        lastActivityTime = millis(); 
-        return; 
+        // --------------------------------------
+        // STATE: FLAPPY BIRD
+        // --------------------------------------
+        else if (currentGameState == STATE_FLAPPY_BIRD) {
+
+            // FLAP (BART_S)
+            if (bartSPressed) {
+                if (flappyDead) {
+                    // Game over: return to main
+                    currentGameState = STATE_MAIN;
+                    spawnPetRandomly();
+                    screenDirty = true;
+                    while(digitalRead(BTN_BART_S_PIN) == LOW) { delay(10); }
+                    lastPressTime = millis();
+                    return;
+                } else if (!flappyActive) {
+                    // First tap: start the game
+                    flappyActive = true;
+                    flappyVelY = FLAPPY_FLAP_VEL;
+                } else {
+                    // Flap!
+                    flappyVelY = FLAPPY_FLAP_VEL;
+                }
+                while(digitalRead(BTN_BART_S_PIN) == LOW) { delay(10); }
+                lastPressTime = millis();
+            }
+
+            // BACK (DRIVE_A)
+            else if (driveAPressed) {
+                currentGameState = STATE_PLAY_MENU;
+                screenDirty = true;
+                while(digitalRead(BTN_DRIVE_A_PIN) == LOW) { delay(10); }
+                lastPressTime = millis();
+                return;
+            }
+        }
+
+        lastActivityTime = millis();
+        return;
     }
 
     // --- 4. STANDARD SYSTEM LOGIC (TRANSIT) ---
@@ -5337,4 +5524,19 @@ void cpuMove() {
             playerTurn = 1; // Back to Player
         }
     }
+}
+
+// *****************************************************************
+// *** FLAPPY BIRD GAME ***
+// *****************************************************************
+
+void initFlappyBird() {
+    flappyY = 32.0f;
+    flappyVelY = 0.0f;
+    flappyActive = false;
+    flappyDead = false;
+    flappyScore = 0;
+    flappyActivePipes = 0;
+    flappyPipeTimer = 55; // First pipe spawns after ~55 frames
+    screenDirty = true;
 }
