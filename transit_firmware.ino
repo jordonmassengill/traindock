@@ -329,6 +329,9 @@ const float FLAPPY_FLAP_VEL = -3.2f;
 const int FLAPPY_PIPE_W = 6;
 const int FLAPPY_GAP_HALF = 11; // Half-gap: total gap = 22px
 const int FLAPPY_CHAO_X = 12;  // Fixed horizontal position of the Chao
+bool flappyGavePlayBonus = false;   // +5 happiness on first tap
+bool flappyGave1PointBonus = false; // +20 happiness when score reaches 1
+bool flappyGave10PointBonus = false;// +25 happiness when score reaches 10
 
 // --- PLAY MENU VARIABLE ---
 int playMenuSelection = 0; // 0: Catch, 1: Connect 3, 2: Flappy Bird
@@ -2385,7 +2388,9 @@ void updateTamagotchi() {
         dma_display->setTextColor(0xFFFF);
         dma_display->setCursor(10, 10); dma_display->setTextColor(playMenuSelection == 0 ? 0x07E0 : 0xFFFF); dma_display->print("CATCH");
         dma_display->setCursor(10, 26); dma_display->setTextColor(playMenuSelection == 1 ? 0x07E0 : 0xFFFF); dma_display->print("CONNECT 3");
-        dma_display->setCursor(10, 42); dma_display->setTextColor(playMenuSelection == 2 ? 0x07E0 : 0xFFFF); dma_display->print("FLAPPY");
+        if (myPet.alignment == 1) {
+            dma_display->setCursor(10, 42); dma_display->setTextColor(playMenuSelection == 2 ? 0x07E0 : 0xFFFF); dma_display->print("FLAPPY");
+        }
     }
 
     // --- STATE: CATCH GAME ---
@@ -2498,7 +2503,16 @@ void updateTamagotchi() {
                     if (!flappyPipes[i].passed && flappyPipes[i].x + FLAPPY_PIPE_W < FLAPPY_CHAO_X - 4) {
                         flappyPipes[i].passed = true;
                         flappyScore++;
-                        myPet.happiness = min(100, myPet.happiness + 2);
+                        // +20 happiness for reaching 1 point
+                        if (flappyScore >= 1 && !flappyGave1PointBonus) {
+                            myPet.happiness = min(100, myPet.happiness + 20);
+                            flappyGave1PointBonus = true;
+                        }
+                        // +25 happiness for reaching 10 points
+                        if (flappyScore >= 10 && !flappyGave10PointBonus) {
+                            myPet.happiness = min(100, myPet.happiness + 25);
+                            flappyGave10PointBonus = true;
+                        }
                     }
                 }
 
@@ -2519,7 +2533,6 @@ void updateTamagotchi() {
                 if (dead) {
                     flappyDead = true;
                     myPet.energy = max(0, myPet.energy - 15);
-                    if (flappyScore >= 5) myPet.happiness = min(100, myPet.happiness + 10);
                 }
             }
 
@@ -3911,7 +3924,8 @@ void handleButtonPress() {
             
             // SCROLL OPTIONS (BART_N)
             if (bartNPressed) {
-                playMenuSelection = (playMenuSelection + 1) % 3;
+                int menuCount = (myPet.alignment == 1) ? 3 : 2;
+                playMenuSelection = (playMenuSelection + 1) % menuCount;
                 lastPressTime = millis();
                 while(digitalRead(BTN_BART_N_PIN) == LOW) { delay(10); }
             }
@@ -3924,7 +3938,7 @@ void handleButtonPress() {
                 } else if (playMenuSelection == 1) {
                     initConnect3();
                     currentGameState = STATE_CONNECT_3;
-                } else if (playMenuSelection == 2) {
+                } else if (playMenuSelection == 2 && myPet.alignment == 1) {
                     initFlappyBird();
                     currentGameState = STATE_FLAPPY_BIRD;
                 }
@@ -4078,6 +4092,11 @@ void handleButtonPress() {
                     // First tap: start the game
                     flappyActive = true;
                     flappyVelY = FLAPPY_FLAP_VEL;
+                    // +5 happiness just for playing
+                    if (!flappyGavePlayBonus) {
+                        myPet.happiness = min(100, myPet.happiness + 5);
+                        flappyGavePlayBonus = true;
+                    }
                 } else {
                     // Flap!
                     flappyVelY = FLAPPY_FLAP_VEL;
@@ -5540,5 +5559,8 @@ void initFlappyBird() {
     flappyScore = 0;
     flappyActivePipes = 0;
     flappyPipeTimer = 55; // First pipe spawns after ~55 frames
+    flappyGavePlayBonus = false;
+    flappyGave1PointBonus = false;
+    flappyGave10PointBonus = false;
     screenDirty = true;
 }
