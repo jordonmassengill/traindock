@@ -1187,6 +1187,11 @@ void fetchDriveData(const DriveDestination* destinations, int destCount,
             return;
         }
 
+        // Collect results into a slot array to restore destination-array order.
+        // The Routes API flat array is unordered — results must be sorted by index.
+        std::vector<TrainPrediction> slots(destCount);
+        std::vector<bool> slotFilled(destCount, false);
+
         JsonArray results = doc.as<JsonArray>();
         for (JsonObject element : results) {
             // Skip elements with no duration (indicates an error for this pair)
@@ -1238,8 +1243,16 @@ void fetchDriveData(const DriveDestination* destinations, int destCount,
             }
 
             String displayInitial = TRAVEL_MODE_DISPLAY_NAMES[currentDriveMode];
-            predictions.push_back({(int)(duration_to_use / 60), dest.name, displayInitial, dest.colorHex, trafficColorHex});
-            success = true;
+            slots[destArrayIdx] = {(int)(duration_to_use / 60), dest.name, displayInitial, dest.colorHex, trafficColorHex};
+            slotFilled[destArrayIdx] = true;
+        }
+
+        // Emit predictions in original destination-array order
+        for (int i = 0; i < destCount; i++) {
+            if (slotFilled[i]) {
+                predictions.push_back(slots[i]);
+                success = true;
+            }
         }
     }
 
