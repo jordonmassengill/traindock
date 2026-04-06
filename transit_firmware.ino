@@ -117,7 +117,7 @@ const long WEATHER_CACHE_TTL = 300; // 5 minutes in seconds
 // --- Travel Mode State ---
 enum DriveMode { MODE_DRIVING, MODE_TRANSIT, MODE_BICYCLING, MODE_WALKING };
 DriveMode currentDriveMode = MODE_DRIVING;
-const String TRAVEL_MODE_API_NAMES[] = {"driving", "transit", "bicycling", "walking"};
+const char* TRAVEL_MODE_API_NAMES[] = {"DRIVE", "TRANSIT", "BICYCLE", "WALK"};
 const String TRAVEL_MODE_DISPLAY_NAMES[] = {"DRIVE", "METRO", "BIKE", "WALK"};
 const String TRAVEL_MODE_TITLE_NAMES[] = {"Drive", "Metro", "Bike", "Walk"};
 const int NUM_DRIVE_MODES = 4;
@@ -1082,142 +1082,166 @@ void fetchMuniSouth() {
 }
 
 // --- With snprintf and String::reserve() ---
-void fetchDriveData(const DriveDestination* destinations, int destCount, 
+void fetchDriveData(const DriveDestination* destinations, int destCount,
                     std::vector<TrainPrediction>& predictions, unsigned long& lastFetchTime, bool isDriveTo) {
-    
+
     Serial.println("[GMAPS] Fetching BATCHED Drive/Transit data...");
     predictions.clear();
     bool success = false;
-    
+
     if (destCount == 0) return; // Nothing to fetch
 
     String apiModeString = TRAVEL_MODE_API_NAMES[currentDriveMode];
     Serial.printf("[GMAPS] Using travel mode: %s\n", apiModeString.c_str());
 
-    // --- (Part 1 - URL String Building) ---
-    String originsStr;
-    String destinationsStr;
-    originsStr.reserve(350);
-    destinationsStr.reserve(350);
-    
+    // --- Part 1: Build JSON request body for Routes API (computeRouteMatrix) ---
+    DynamicJsonDocument reqDoc(4096);
+
+    JsonArray originsArr = reqDoc.createNestedArray("origins");
+    JsonArray destsArr   = reqDoc.createNestedArray("destinations");
+
     if (isDriveTo) {
-        originsStr = destinations[0].originLat + "," + destinations[0].originLon;
+        // One origin, many destinations
+        JsonObject orig     = originsArr.createNestedObject();
+        JsonObject oWp      = orig.createNestedObject("waypoint");
+        JsonObject oLoc     = oWp.createNestedObject("location");
+        JsonObject oLatLng  = oLoc.createNestedObject("latLng");
+        oLatLng["latitude"]  = destinations[0].originLat.toDouble();
+        oLatLng["longitude"] = destinations[0].originLon.toDouble();
+
         for (int i = 0; i < destCount; i++) {
-            destinationsStr += destinations[i].destLat + "," + destinations[i].destLon;
-            if (i < destCount - 1) destinationsStr += "|";
+            JsonObject d      = destsArr.createNestedObject();
+            JsonObject dWp    = d.createNestedObject("waypoint");
+            JsonObject dLoc   = dWp.createNestedObject("location");
+            JsonObject dLatLng = dLoc.createNestedObject("latLng");
+            dLatLng["latitude"]  = destinations[i].destLat.toDouble();
+            dLatLng["longitude"] = destinations[i].destLon.toDouble();
         }
         Serial.println("[GMAPS] Mode: One-to-Many (Drive A)");
     } else {
-        destinationsStr = destinations[0].destLat + "," + destinations[0].destLon;
+        // Many origins, one destination
         for (int i = 0; i < destCount; i++) {
-            originsStr += destinations[i].originLat + "," + destinations[i].originLon;
-            if (i < destCount - 1) originsStr += "|";
+            JsonObject orig    = originsArr.createNestedObject();
+            JsonObject oWp     = orig.createNestedObject("waypoint");
+            JsonObject oLoc    = oWp.createNestedObject("location");
+            JsonObject oLatLng = oLoc.createNestedObject("latLng");
+            oLatLng["latitude"]  = destinations[i].originLat.toDouble();
+            oLatLng["longitude"] = destinations[i].originLon.toDouble();
         }
+
+        JsonObject d      = destsArr.createNestedObject();
+        JsonObject dWp    = d.createNestedObject("waypoint");
+        JsonObject dLoc   = dWp.createNestedObject("location");
+        JsonObject dLatLng = dLoc.createNestedObject("latLng");
+        dLatLng["latitude"]  = destinations[0].destLat.toDouble();
+        dLatLng["longitude"] = destinations[0].destLon.toDouble();
         Serial.println("[GMAPS] Mode: Many-to-One (Drive B)");
     }
 
-    char gmapsUrl[600];
-    snprintf(gmapsUrl, sizeof(gmapsUrl),
-             "https://maps.googleapis.com/maps/api/distancematrix/json?units=imperial&origins=%s&destinations=%s&mode=%s&departure_time=now&key=%s",
-             originsStr.c_str(),
-             destinationsStr.c_str(),
-             apiModeString.c_str(),
-             GMAPS_API_KEY);
-    
-    // --- (Part 2 - HTTP Request & JSON Parsing) ---
-    String payload = makeHttpRequest(gmapsUrl);
+    reqDoc["travelMode"] = apiModeString;
+    if (currentDriveMode == MODE_DRIVING) {
+        reqDoc["routingPreference"] = "TRAFFIC_AWARE";
+    }
 
+    String requestBody;
+    serializeJson(reqDoc, requestBody);
+    reqDoc.clear(); // Free memory before making HTTP request
+
+    // --- Part 2: POST request to Routes API ---
+    WiFiClientSecure secureClient;
+    secureClient.setInsecure();
+
+    HTTPClient http;
+    if (!http.begin(secureClient, "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix")) {
+        Serial.println("[GMAPS] ERROR: HTTP begin failed.");
+        return;
+    }
+
+    http.setTimeout(15000);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("X-Goog-Api-Key", GMAPS_API_KEY1);
+    http.addHeader("X-Goog-FieldMask", "originIndex,destinationIndex,duration,staticDuration,status");
+
+    int httpCode = http.POST(requestBody);
+    String payload = "";
+    if (httpCode == HTTP_CODE_OK) {
+        payload = http.getString();
+    } else {
+        Serial.printf("[GMAPS] POST failed (%d): %s\n", httpCode, http.errorToString(httpCode).c_str());
+    }
+    http.end();
+
+    // --- Part 3: Parse flat array response ---
     if (payload.length() > 0) {
         DynamicJsonDocument doc(MAX_DECOMPRESSED_SIZE);
         if (deserializeJson(doc, payload)) {
-             Serial.println("[GMAPS] JSON parse failed.");
-             return;
+            Serial.println("[GMAPS] JSON parse failed.");
+            return;
         }
 
-        if (doc["status"].as<String>() == "OK") {
-            
-            if (isDriveTo) {
-                // One Origin, Many Destinations
-                JsonArray elements = doc["rows"][0]["elements"].as<JsonArray>();
-                int elementIndex = 0;
-                for (JsonObject element : elements) {
-                    if (element["status"].as<String>() == "OK") {
-                        long duration_normal = element["duration"]["value"].as<long>();
-                        long duration_traffic = element["duration_in_traffic"].isNull() ? duration_normal : element["duration_in_traffic"]["value"].as<long>();
-                        
-                        String trafficColorHex = ""; 
-                        if (currentDriveMode == MODE_DRIVING && duration_normal > 0) {
-                            double ratio = (double)duration_traffic / (double)duration_normal;
-                            if (ratio > 1.6) trafficColorHex = "#FF0000";      // Red
-                            else if (ratio > 1.2) trafficColorHex = "#FFFF00"; // Yellow
-                            else trafficColorHex = "#00FF00";                 // Green
-                        }
-                        
-                        const DriveDestination& dest = destinations[elementIndex]; 
-                        String displayInitial = TRAVEL_MODE_DISPLAY_NAMES[currentDriveMode];
-                        predictions.push_back({(int)(duration_traffic / 60), dest.name, displayInitial, dest.colorHex, trafficColorHex});
-                        success = true;
-                    }
-                    elementIndex++;
-                }
-            } else {
-                // Many Origins, One Destination (DRIVE_B)
-                JsonArray rows = doc["rows"].as<JsonArray>();
-                int rowIndex = 0;
-                for (JsonObject row : rows) {
-                    JsonObject element = row["elements"][0]; 
-                    if (element["status"].as<String>() == "OK") {
-                        long duration_normal = element["duration"]["value"].as<long>();
-                       long duration_traffic = element["duration_in_traffic"].isNull() ? duration_normal : element["duration_in_traffic"]["value"].as<long>();
-                        
-                        // Get the destination info first so we can check the name
-                        const DriveDestination& dest = destinations[rowIndex];
-                        
-                        // --- [JORDON'S MOTORCYCLE RULE (AGGRESSIVE)] ---
-                        long duration_to_use = duration_traffic; // Default to car time
-                        
-                        // Check if mode is DRIVING and the destination name is "JORDON"
-                         if (currentDriveMode == MODE_DRIVING && dest.name == "JORDON") {
-                            
-                            // 1. Calculate the pure traffic delay (Total - Normal)
-                            long traffic_delay = duration_traffic - duration_normal;
-                            
-                            // Safety: ensure delay isn't negative (glitch protection)
-                            if (traffic_delay < 0) traffic_delay = 0;
-
-                            // 2. Logic: Speed on base drive + Filter through delay
-                            //    (double) cast ensures the 1.3 division happens correctly before turning back to long
-                            long base_moto_time = (long)((double)duration_normal / 1.2);
-                            long filtered_delay = traffic_delay / 2.5;
-                            
-                            duration_to_use = base_moto_time + filtered_delay;
-                            
-                            Serial.printf("[GMAPS] Moto Rule: Car %ldm -> Moto %ldm\n", (duration_traffic/60), (duration_to_use/60));
-                        }
-                        // --- [END OF LOGIC] ---
-
-                        String trafficColorHex = ""; // Default: empty
-                       if (currentDriveMode == MODE_DRIVING && duration_normal > 0) {
-                            // Use the *original* duration_traffic for the color ratio
-                            double ratio = (double)duration_traffic / (double)duration_normal;
-                             if (ratio > 1.6) trafficColorHex = "#FF0000";      // Red
-                            else if (ratio > 1.2) trafficColorHex = "#FFFF00"; // Yellow
-                             else trafficColorHex = "#00FF00";                 // Green
-                        }
-
-                        String displayInitial = TRAVEL_MODE_DISPLAY_NAMES[currentDriveMode];
-                        // Use the (possibly modified) duration_to_use for the prediction
-                       predictions.push_back({(int)(duration_to_use / 60), dest.name, displayInitial, dest.colorHex, trafficColorHex});
-                           success = true;
-                   }
-                    rowIndex++;
-                }
-            }
-        } else {
-           String errorMsg = doc["error_message"].as<String>();
+        // Routes API returns a flat array on success, or an object with "error" on failure
+        if (!doc.is<JsonArray>()) {
+            String errorMsg = doc["error"]["message"].as<String>();
             if (errorMsg.length() > 0) Serial.println("[GMAPS] API Error: " + errorMsg);
+            else Serial.println("[GMAPS] Unexpected response format.");
+            return;
         }
-    } 
+
+        JsonArray results = doc.as<JsonArray>();
+        for (JsonObject element : results) {
+            // Skip elements with no duration (indicates an error for this pair)
+            if (element["duration"].isNull()) continue;
+
+            int originIdx = element["originIndex"].as<int>();
+            int destIdx   = element["destinationIndex"].as<int>();
+
+            // Map result index to destination array index
+            int destArrayIdx = isDriveTo ? destIdx : originIdx;
+            if (destArrayIdx < 0 || destArrayIdx >= destCount) continue;
+
+            // Parse duration strings — format is "1500s"; strip trailing 's'
+            String durationStr       = element["duration"].as<String>();
+            String staticDurationStr = element["staticDuration"].as<String>();
+            if (durationStr.endsWith("s"))       durationStr.remove(durationStr.length() - 1);
+            if (staticDurationStr.endsWith("s")) staticDurationStr.remove(staticDurationStr.length() - 1);
+
+            long duration_traffic = durationStr.toInt();       // traffic-aware time
+            long duration_normal  = staticDurationStr.toInt(); // baseline (no traffic)
+
+            // staticDuration is only returned for DRIVE mode; fall back for other modes
+            if (duration_normal == 0 && duration_traffic > 0) duration_normal = duration_traffic;
+
+            const DriveDestination& dest = destinations[destArrayIdx];
+
+            // --- [JORDON'S MOTORCYCLE RULE (AGGRESSIVE)] ---
+            long duration_to_use = duration_traffic; // Default to car time
+
+            if (currentDriveMode == MODE_DRIVING && dest.name == "JORDON") {
+                long traffic_delay = duration_traffic - duration_normal;
+                if (traffic_delay < 0) traffic_delay = 0;
+
+                long base_moto_time = (long)((double)duration_normal / 1.2);
+                long filtered_delay = traffic_delay / 2.5;
+
+                duration_to_use = base_moto_time + filtered_delay;
+                Serial.printf("[GMAPS] Moto Rule: Car %ldm -> Moto %ldm\n", (duration_traffic/60), (duration_to_use/60));
+            }
+            // --- [END OF JORDON RULE] ---
+
+            String trafficColorHex = "";
+            if (currentDriveMode == MODE_DRIVING && duration_normal > 0) {
+                // Use the *original* duration_traffic for the color ratio
+                double ratio = (double)duration_traffic / (double)duration_normal;
+                if (ratio > 1.6) trafficColorHex = "#FF0000";      // Red
+                else if (ratio > 1.2) trafficColorHex = "#FFFF00"; // Yellow
+                else trafficColorHex = "#00FF00";                   // Green
+            }
+
+            String displayInitial = TRAVEL_MODE_DISPLAY_NAMES[currentDriveMode];
+            predictions.push_back({(int)(duration_to_use / 60), dest.name, displayInitial, dest.colorHex, trafficColorHex});
+            success = true;
+        }
+    }
 
     if (success) {
         lastFetchTime = millis() / 1000;
