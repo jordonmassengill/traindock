@@ -484,13 +484,13 @@ const DriveDestination DRIVE_DATA_A[] = {
     {"JORDON", SF_HOME_LAT, SF_HOME_LON, JORDON_LAT, JORDON_LON, "driving", "#006324"}, 
     {"PARNELLA", SF_HOME_LAT, SF_HOME_LON, PARNELLA_LAT, PARNELLA_LON, "driving", "#7fa322"},
     {"MIKEBECCA", SF_HOME_LAT, SF_HOME_LON, MIKEBECCA_LAT, MIKEBECCA_LON, "driving", "#2600BD"},
-    {"LEEVIKA", SF_HOME_LAT, SF_HOME_LON, LEEVIKA_LAT, LEEVIKA_LON, "driving", "#998FFF"},
     {"FLORA", SF_HOME_LAT, SF_HOME_LON, FLORA_LAT, FLORA_LON, "driving", "#8500D1"},
+    {"EUNICE", SF_HOME_LAT, SF_HOME_LON, EUNICE_LAT, EUNICE_LON, "driving", "#FF9500"},
     {"JULIA", SF_HOME_LAT, SF_HOME_LON, JULIA_LAT, JULIA_LON, "driving", "#FF82D0"},
     {"MOM", SF_HOME_LAT, SF_HOME_LON, MOM_LAT, MOM_LON, "driving", "#FFE100"},
     {"DAD", SF_HOME_LAT, SF_HOME_LON, DAD_LAT, DAD_LON, "driving", "#00FF19"},
-    {"EUNICE", SF_HOME_LAT, SF_HOME_LON, EUNICE_LAT, EUNICE_LON, "driving", "#FF9500"},
     {"MINA", SF_HOME_LAT, SF_HOME_LON, MINA_LAT, MINA_LON, "driving", "#A61E00"},
+    {"LEEVIKA", SF_HOME_LAT, SF_HOME_LON, LEEVIKA_LAT, LEEVIKA_LON, "driving", "#998FFF"},
     {"PANTS JOHN", SF_HOME_LAT, SF_HOME_LON, JOHN_LAT, JOHN_LON, "driving", "#ffd500"},
     {"FARHAN", SF_HOME_LAT, SF_HOME_LON, FARHAN_LAT, FARHAN_LON, "driving", "#FF0000"},
     {"BERKELEY", SF_HOME_LAT, SF_HOME_LON, BERKELEY_LAT, BERKELEY_LON, "driving", "#FFFFFF"},
@@ -501,13 +501,13 @@ const DriveDestination DRIVE_DATA_B[] = {
     {"JORDON", JORDON_LAT, JORDON_LON, SF_HOME_LAT, SF_HOME_LON, "driving", "#006324"}, 
     {"PARNELLA", PARNELLA_LAT, PARNELLA_LON, SF_HOME_LAT, SF_HOME_LON, "driving", "#7fa322"},
     {"MIKEBECCA", MIKEBECCA_LAT, MIKEBECCA_LON, SF_HOME_LAT, SF_HOME_LON, "driving", "#2600BD"},
-    {"LEEVIKA", LEEVIKA_LAT, LEEVIKA_LON, SF_HOME_LAT, SF_HOME_LON, "driving", "#998FFF"},
     {"FLORA", FLORA_LAT, FLORA_LON, SF_HOME_LAT, SF_HOME_LON, "driving", "#8500D1"},
+    {"EUNICE", EUNICE_LAT, EUNICE_LON, SF_HOME_LAT, SF_HOME_LON, "driving", "#FF9500"},
     {"JULIA", JULIA_LAT, JULIA_LON, SF_HOME_LAT, SF_HOME_LON, "driving", "#FF82D0"},
     {"MOM", MOM_LAT, MOM_LON, SF_HOME_LAT, SF_HOME_LON, "driving", "#FFE100"},
     {"DAD", DAD_LAT, DAD_LON, SF_HOME_LAT, SF_HOME_LON, "driving", "#00FF19"},
-    {"EUNICE", EUNICE_LAT, EUNICE_LON, SF_HOME_LAT, SF_HOME_LON, "driving", "#FF9500"},
     {"MINA", MINA_LAT, MINA_LON, SF_HOME_LAT, SF_HOME_LON, "driving", "#A61E00"},
+    {"LEEVIKA", LEEVIKA_LAT, LEEVIKA_LON, SF_HOME_LAT, SF_HOME_LON, "driving", "#998FFF"},
     {"PANTS JOHN", JOHN_LAT, JOHN_LON, SF_HOME_LAT, SF_HOME_LON, "driving", "#ffd500"},
     {"FARHAN", FARHAN_LAT, FARHAN_LON, SF_HOME_LAT, SF_HOME_LON, "driving", "#FF0000"},
     {"BERKELEY", BERKELEY_LAT, BERKELEY_LON, SF_HOME_LAT, SF_HOME_LON, "driving", "#FFFFFF"},
@@ -2842,6 +2842,13 @@ void loadGame(String slotName) {
 
         Serial.println("File Loaded. Calculating offline progress...");
         calculateOfflineProgress();
+
+        // TEMP: Restore vitality, remove after one flash
+        /*
+        myPet.vitality = min(100.0f, myPet.vitality + 50.0f);
+        saveGame();
+        Serial.println("[FIX] Vitality restored.");
+        */
 
         // --- LOGIC: Check for death on load ---
         if (myPet.isDead) {
@@ -5563,10 +5570,10 @@ void cpuMove() {
 
                 // Loss streak bonus: +5 vitality after 3 consecutive losses
                 connect3LossStreak++;
-                if (connect3LossStreak >= 3) {
+                if (connect3LossStreak >= 5) {
                     myPet.vitality = min(100.0f, myPet.vitality + 5.0f);
                     connect3LossStreak = 0;
-                    Serial.println("[VITALITY] +5 bonus: Lost Connect 3 three times in a row!");
+                    Serial.println("[VITALITY] +5 bonus: Lost Connect 5 three times in a row!");
                 }
 
                 return; // Leave piece there and exit
