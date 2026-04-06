@@ -115,11 +115,11 @@ unsigned long lastWeatherFetchTime = 0;
 const long WEATHER_CACHE_TTL = 300; // 5 minutes in seconds
 
 // --- Travel Mode State ---
-enum DriveMode { MODE_DRIVING, MODE_TRANSIT, MODE_BICYCLING, MODE_WALKING, MODE_RUNNING };
+enum DriveMode { MODE_DRIVING, MODE_TRANSIT, MODE_BICYCLING, MODE_RUNNING, MODE_WALKING };
 DriveMode currentDriveMode = MODE_DRIVING;
 const char* TRAVEL_MODE_API_NAMES[] = {"DRIVE", "TRANSIT", "BICYCLE", "WALK", "WALK"};
-const String TRAVEL_MODE_DISPLAY_NAMES[] = {"DRIVE", "METRO", "BIKE", "WALK", "RUN"};
-const String TRAVEL_MODE_TITLE_NAMES[] = {"Drive", "Metro", "Bike", "Walk", "Run"};
+const String TRAVEL_MODE_DISPLAY_NAMES[] = {"DRIVE", "METRO", "BIKE", "RUN", "WALK"};
+const String TRAVEL_MODE_TITLE_NAMES[] = {"Drive", "Metro", "Bike", "Run", "Walk"};
 const int NUM_DRIVE_MODES = 5;
 // --- End of Travel Variables ---
 
@@ -451,6 +451,11 @@ volatile bool isFetchingBIKE = false;
 int bikeAnimationFrame = 0;
 unsigned long lastBIKEFrameTime = 0;
 
+// --- RUN Animation State ---
+volatile bool isFetchingRUN = false;
+int runAnimationFrame = 0;
+unsigned long lastRUNFrameTime = 0;
+
 // --- WALK Animation State ---
 volatile bool isFetchingWALK = false;
 int walkAnimationFrame = 0;
@@ -564,7 +569,7 @@ bool isFetching();
 
 // --- Returns true if any fetch is active ---
 bool isFetching() {
-    return isFetchingMUNI || isFetchingBART || isFetchingDRIVE || isFetchingMETRO || isFetchingBIKE || isFetchingWALK;
+    return isFetchingMUNI || isFetchingBART || isFetchingDRIVE || isFetchingMETRO || isFetchingBIKE || isFetchingRUN || isFetchingWALK;
 }
 
 // --- [ HELPER FUNCTION] ---
@@ -4257,8 +4262,8 @@ void handleButtonPress() {
 
     // [CANCEL LOGIC 3: Drive Cycle]
     if (driveAPressed && driveBPressed) {
-        if (isFetchingDRIVE || isFetchingMETRO || isFetchingBIKE || isFetchingWALK) {
-             isFetchingDRIVE = false; isFetchingMETRO = false; isFetchingBIKE = false; isFetchingWALK = false; activeFetchID++;
+        if (isFetchingDRIVE || isFetchingMETRO || isFetchingBIKE || isFetchingRUN || isFetchingWALK) {
+             isFetchingDRIVE = false; isFetchingMETRO = false; isFetchingBIKE = false; isFetchingRUN = false; isFetchingWALK = false; activeFetchID++;
         }
         executeDriveModeCycle();
         delay(1000); isClockActive = true; justExitedClock = true; lastActivityTime = 0; lastClockRenderTime = 0; 
@@ -4323,7 +4328,8 @@ void handleButtonPress() {
             needsFetch = true; driveAIndex = 0;
              if (currentDriveMode == MODE_TRANSIT) isFetchingMETRO = true;
              else if (currentDriveMode == MODE_BICYCLING) isFetchingBIKE = true;
-             else if (currentDriveMode == MODE_WALKING || currentDriveMode == MODE_RUNNING) isFetchingWALK = true;
+             else if (currentDriveMode == MODE_RUNNING) isFetchingRUN = true;
+             else if (currentDriveMode == MODE_WALKING) isFetchingWALK = true;
              else isFetchingDRIVE = true;
         } else {
             if (justExitedClock) { if (driveAIndex > 0) driveAIndex--; justExitedClock = false; }
@@ -4337,7 +4343,8 @@ void handleButtonPress() {
             needsFetch = true; driveBIndex = 0;
              if (currentDriveMode == MODE_TRANSIT) isFetchingMETRO = true;
              else if (currentDriveMode == MODE_BICYCLING) isFetchingBIKE = true;
-             else if (currentDriveMode == MODE_WALKING || currentDriveMode == MODE_RUNNING) isFetchingWALK = true;
+             else if (currentDriveMode == MODE_RUNNING) isFetchingRUN = true;
+             else if (currentDriveMode == MODE_WALKING) isFetchingWALK = true;
              else isFetchingDRIVE = true;
         } else {
             if (justExitedClock) { if (driveBIndex > 0) driveBIndex--; justExitedClock = false; }
@@ -4402,11 +4409,12 @@ void loop() {
             
             
             // Stop all fetch animations
-            isFetchingMUNI = false; 
+            isFetchingMUNI = false;
             isFetchingBART = false;
             isFetchingDRIVE = false;
             isFetchingMETRO = false;
             isFetchingBIKE = false;
+            isFetchingRUN = false;
             isFetchingWALK = false;
             
             justExitedClock = false;      
@@ -4429,8 +4437,11 @@ void loop() {
     else if (isFetchingMETRO) {
      animateMETROLoading();
     }
-    else if (isFetchingBIKE) { 
+    else if (isFetchingBIKE) {
      animateBIKELoading();
+    }
+    else if (isFetchingRUN) {
+     animateRUNLoading();
     }
     else if (isFetchingWALK) {
      animateWALKLoading();
@@ -5110,6 +5121,26 @@ void animateBIKELoading() {
 
     bikeAnimationFrame++;
     if (bikeAnimationFrame >= 6) bikeAnimationFrame = 0;
+}
+
+// --- RUN Animation Function ---
+void animateRUNLoading() {
+    if (millis() - lastRUNFrameTime < ANIMATION_SPEED_MS) return;
+    lastRUNFrameTime = millis();
+
+    dma_display->fillScreen(dma_display->color565(0, 0, 0));
+
+    int16_t x_pos = (PANEL_RES_X - RUN_ANIM_WIDTH) / 2;
+    int16_t y_pos = (PANEL_RES_Y - RUN_ANIM_HEIGHT) / 2;
+    const uint16_t* bitmap_ptr = run_anim_frames[runAnimationFrame];
+
+    // Use the helper
+    drawDayNightBitmap(x_pos, y_pos, bitmap_ptr, RUN_ANIM_WIDTH, RUN_ANIM_HEIGHT);
+
+    dma_display->flipDMABuffer();
+
+    runAnimationFrame++;
+    if (runAnimationFrame >= 6) runAnimationFrame = 0;
 }
 
 // --- WALK Animation Function ---
