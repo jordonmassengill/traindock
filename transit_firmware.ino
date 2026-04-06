@@ -3245,12 +3245,20 @@ void handleButtonPress() {
     static unsigned long comboStartTime = 0; 
 
     // --- 1. READ BUTTONS ---
-    bool muniNPressed = (digitalRead(BTN_MUNI_N_PIN) == LOW); 
-    bool muniSPressed = (digitalRead(BTN_MUNI_S_PIN) == LOW); 
-    bool bartNPressed = (digitalRead(BTN_BART_N_PIN) == LOW); 
-    bool bartSPressed = (digitalRead(BTN_BART_S_PIN) == LOW); 
-    bool driveAPressed = (digitalRead(BTN_DRIVE_A_PIN) == LOW); 
-    bool driveBPressed = (digitalRead(BTN_DRIVE_B_PIN) == LOW); 
+    // Double-check pattern: if a pin reads LOW, wait 50ms and confirm it is
+    // still LOW. A noise spike resolves in microseconds and fails the recheck;
+    // a real finger press holds LOW for hundreds of milliseconds and passes.
+    auto confirmedLow = [](uint8_t pin) -> bool {
+        if (digitalRead(pin) != LOW) return false;
+        delay(50);
+        return (digitalRead(pin) == LOW);
+    };
+    bool muniNPressed  = confirmedLow(BTN_MUNI_N_PIN);
+    bool muniSPressed  = confirmedLow(BTN_MUNI_S_PIN);
+    bool bartNPressed  = confirmedLow(BTN_BART_N_PIN);
+    bool bartSPressed  = confirmedLow(BTN_BART_S_PIN);
+    bool driveAPressed = confirmedLow(BTN_DRIVE_A_PIN);
+    bool driveBPressed = confirmedLow(BTN_DRIVE_B_PIN);
 
     // --- 2. MASTER COMBO (Toggle Game) ---
     if (driveBPressed && muniSPressed) { 
