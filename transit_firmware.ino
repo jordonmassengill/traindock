@@ -4107,8 +4107,13 @@ void handleButtonPress() {
                 }
                 
                 // [SCENARIO B] GAME IS RUNNING
-                // We are dropping a piece.
-                int r = dropPiece(1, connect3CursorX); 
+                // We are dropping a piece - only allowed on the player's turn.
+                if (playerTurn != 1) {
+                    while(digitalRead(BTN_BART_S_PIN) == LOW) { delay(10); }
+                    lastPressTime = millis();
+                    return;
+                }
+                int r = dropPiece(1, connect3CursorX);
                 if (r != -1) { 
                     if (checkWin(1, connect3CursorX, r)) {
                         // PLAYER WINS
