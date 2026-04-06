@@ -1187,6 +1187,11 @@ void fetchDriveData(const DriveDestination* destinations, int destCount,
             return;
         }
 
+        // Use a temporary array indexed by destination order so results are
+        // stored in the same order as destinations[], regardless of API response order.
+        struct TempResult { bool filled; TrainPrediction pred; };
+        std::vector<TempResult> tempResults(destCount, {false, {}});
+
         JsonArray results = doc.as<JsonArray>();
         for (JsonObject element : results) {
             // Skip elements with no duration (indicates an error for this pair)
@@ -1238,8 +1243,13 @@ void fetchDriveData(const DriveDestination* destinations, int destCount,
             }
 
             String displayInitial = TRAVEL_MODE_DISPLAY_NAMES[currentDriveMode];
-            predictions.push_back({(int)(duration_to_use / 60), dest.name, displayInitial, dest.colorHex, trafficColorHex});
+            tempResults[destArrayIdx] = {true, {(int)(duration_to_use / 60), dest.name, displayInitial, dest.colorHex, trafficColorHex}};
             success = true;
+        }
+
+        // Push results in destinations[] order (preserving original display order)
+        for (int i = 0; i < destCount; i++) {
+            if (tempResults[i].filled) predictions.push_back(tempResults[i].pred);
         }
     }
 
