@@ -115,12 +115,12 @@ unsigned long lastWeatherFetchTime = 0;
 const long WEATHER_CACHE_TTL = 300; // 5 minutes in seconds
 
 // --- Travel Mode State ---
-enum DriveMode { MODE_DRIVING, MODE_TRANSIT, MODE_BICYCLING, MODE_WALKING };
+enum DriveMode { MODE_DRIVING, MODE_TRANSIT, MODE_BICYCLING, MODE_WALKING, MODE_RUNNING };
 DriveMode currentDriveMode = MODE_DRIVING;
-const char* TRAVEL_MODE_API_NAMES[] = {"DRIVE", "TRANSIT", "BICYCLE", "WALK"};
-const String TRAVEL_MODE_DISPLAY_NAMES[] = {"DRIVE", "METRO", "BIKE", "WALK"};
-const String TRAVEL_MODE_TITLE_NAMES[] = {"Drive", "Metro", "Bike", "Walk"};
-const int NUM_DRIVE_MODES = 4;
+const char* TRAVEL_MODE_API_NAMES[] = {"DRIVE", "TRANSIT", "BICYCLE", "WALK", "WALK"};
+const String TRAVEL_MODE_DISPLAY_NAMES[] = {"DRIVE", "METRO", "BIKE", "WALK", "RUN"};
+const String TRAVEL_MODE_TITLE_NAMES[] = {"Drive", "Metro", "Bike", "Walk", "Run"};
+const int NUM_DRIVE_MODES = 5;
 // --- End of Travel Variables ---
 
 int muniNorthIndex = 0; int muniSouthIndex = 0;
@@ -1233,6 +1233,23 @@ void fetchDriveData(const DriveDestination* destinations, int destCount,
             }
             // --- [END OF JORDON RULE] ---
 
+            // --- [RUN MODE RULE] ---
+            // Uses WALK API data but applies a pace multiplier with ceiling rounding.
+            // First 30 walk-minutes: x0.45; remaining: x0.40
+            if (currentDriveMode == MODE_RUNNING) {
+                double walk_min = (double)duration_to_use / 60.0;
+                double run_min;
+                if (walk_min <= 30.0) {
+                    run_min = walk_min * 0.45;
+                } else {
+                    run_min = 30.0 * 0.45 + (walk_min - 30.0) * 0.4;
+                }
+                duration_to_use = (long)(ceil(run_min) * 60.0);
+                Serial.printf("[GMAPS] Run Rule: Walk %.1fm -> Run %.1fm (ceiled %ldm)\n",
+                              walk_min, run_min, duration_to_use / 60);
+            }
+            // --- [END OF RUN RULE] ---
+
             String trafficColorHex = "";
             if (currentDriveMode == MODE_DRIVING && duration_normal > 0) {
                 // Use the *original* duration_traffic for the color ratio
@@ -1384,7 +1401,7 @@ void renderDisplay(String line1, String line2, String colorHex, String timeColor
     bool isSystemMessage = (line1 == "BOOTING" || line1 == "READY" || line1 == "FETCHING" || \
                             line1 == "WAIT" || line1 == "ERROR" || line1 == "NO SERVICE" || line1 == "DRIVE TIME" || \
                             line1 == "TIME" || line1 == "BRIGHT" || line1 == "MEDIUM" || line1 == "DIM" || \
-                            line1 == "DRIVE" || line1 == "METRO" || line1 == "BIKE" || line1 == "WALK" || \
+                            line1 == "DRIVE" || line1 == "METRO" || line1 == "BIKE" || line1 == "WALK" || line1 == "RUN" || \
                             line1 == "MODE SET" || line1 == "LEVEL" || line1 == "IDLE MODE");
     
     bool isClockDisplay = false;
@@ -4306,7 +4323,7 @@ void handleButtonPress() {
             needsFetch = true; driveAIndex = 0;
              if (currentDriveMode == MODE_TRANSIT) isFetchingMETRO = true;
              else if (currentDriveMode == MODE_BICYCLING) isFetchingBIKE = true;
-             else if (currentDriveMode == MODE_WALKING) isFetchingWALK = true;
+             else if (currentDriveMode == MODE_WALKING || currentDriveMode == MODE_RUNNING) isFetchingWALK = true;
              else isFetchingDRIVE = true;
         } else {
             if (justExitedClock) { if (driveAIndex > 0) driveAIndex--; justExitedClock = false; }
@@ -4320,7 +4337,7 @@ void handleButtonPress() {
             needsFetch = true; driveBIndex = 0;
              if (currentDriveMode == MODE_TRANSIT) isFetchingMETRO = true;
              else if (currentDriveMode == MODE_BICYCLING) isFetchingBIKE = true;
-             else if (currentDriveMode == MODE_WALKING) isFetchingWALK = true;
+             else if (currentDriveMode == MODE_WALKING || currentDriveMode == MODE_RUNNING) isFetchingWALK = true;
              else isFetchingDRIVE = true;
         } else {
             if (justExitedClock) { if (driveBIndex > 0) driveBIndex--; justExitedClock = false; }
